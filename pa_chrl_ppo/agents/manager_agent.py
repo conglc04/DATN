@@ -3,10 +3,9 @@
 Phase 3.3.1 / 3.3.2: high-level policy operating on coarse multi-cell aggregate
 state every Manager step (T_H = 100 ms sim = 10 Worker steps).
 
-Output action dimensions (Phase 2.3.2):
-    a_H = (b_rrm, f_MEC)        # 2-dim continuous
+Output action dimensions (Phase 2.3.2; MEC offload removed — B0b):
+    a_H = (b_rrm,)             # 1-dim continuous
         b_rrm ∈ [0, 1]          RRM budget hint to Worker (post-decoded via sigmoid)
-        f_MEC ∈ [0, F_MEC_TOTAL] MEC CPU fraction (post-decoded via sigmoid × F_MEC)
 
 Reference:
     - docs/13_methodology_walkthrough.md Phase 3.3.1 (Manager arch)
@@ -25,7 +24,6 @@ from torch.distributions import Normal
 
 from agents.ppo_core import compute_gae, entropy_bonus, ppo_clip_loss, value_loss
 from utils.config import (
-    F_MEC,
     GAE_LAMBDA,
     GAMMA_MANAGER,
     LR_PI_H,
@@ -36,7 +34,7 @@ from utils.config import (
 )
 
 MANAGER_STATE_DIM_DEFAULT: int = 11
-MANAGER_ACTION_DIM_DEFAULT: int = 2
+MANAGER_ACTION_DIM_DEFAULT: int = 1
 
 
 def _make_mlp(in_dim: int, hidden: Sequence[int], out_dim: int) -> nn.Sequential:
@@ -51,9 +49,9 @@ def _make_mlp(in_dim: int, hidden: Sequence[int], out_dim: int) -> nn.Sequential
 
 
 class ManagerActor(nn.Module):
-    """π_H — Gaussian policy over (b_rrm, f_MEC).
+    """π_H — Gaussian policy over (b_rrm,).
 
-    Outputs (mean, log_std) for 2-dim action. Post-processing (sigmoid scaling)
+    Outputs (mean, log_std) for 1-dim action. Post-processing (sigmoid scaling)
     happens in the decoder, NOT inside the actor, so log_prob math stays clean.
     """
 
@@ -94,13 +92,12 @@ class ManagerCritic(nn.Module):
 
 
 def decode_manager_action(action_raw: np.ndarray) -> dict[str, float]:
-    """Map raw Gaussian sample → (b_rrm, f_MEC) on their proper supports.
+    """Map raw Gaussian sample → (b_rrm,) on its proper support.
 
-    a_raw is unbounded Gaussian; we squash via sigmoid then scale.
+    a_raw is unbounded Gaussian; we squash via sigmoid.
     """
     b_rrm = float(1.0 / (1.0 + np.exp(-float(action_raw[0]))))                 # [0, 1]
-    f_mec = float(F_MEC / (1.0 + np.exp(-float(action_raw[1]))))               # [0, F_MEC]
-    return {"b_rrm": b_rrm, "f_mec": f_mec}
+    return {"b_rrm": b_rrm}
 
 
 class ManagerAgent:

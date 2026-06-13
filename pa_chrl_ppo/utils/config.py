@@ -35,8 +35,6 @@ BACH_MAI_LAT: Final[float] = 21.002965894776974
 BACH_MAI_LON: Final[float] = 105.84078002433277
 R_CELL_M: Final[float] = 300.0         # single-cell UMi radius, gNB=(0,0), no handover
 NUM_RU: Final[int] = 20                # 20 O-RU in 3×3 km Hanoi grid (5×4)
-F_MEC: Final[float] = 10e9             # 10 GHz MEC CPU budget per O-DU edge server.
-                                        # Engineering assumption (edge server scale); ref Mlika 2021
                                         # "Network Slicing with MEC and DRL for IoV". See REFERENCE_MAP §2.
 C_FH_BPS: Final[float] = 25e9          # 25 Gbps eCPRI fronthaul capacity per O-RU
                                         # (O-RAN.WG4 standard cho 32T32R Massive MIMO sub-6 GHz;
@@ -362,7 +360,6 @@ def summary() -> str:
         f"PA-CHRL-PPO config: P_total={P_TOTAL} PRB, "
         f"B_PRB={B_PRB/1e3:.0f}kHz, "
         f"f_c={F_CARRIER/1e9:.1f}GHz, "
-        f"F_MEC={F_MEC/1e9:.0f}GHz, "
         f"phases={len(PHASE_QOS)}, "
         f"D_max^φ₃={PHASE_QOS[3]['D_max']*1e3:.2f}ms, "
         f"γ_L={GAMMA_WORKER:.3f}, γ_H={GAMMA_MANAGER:.4f}"

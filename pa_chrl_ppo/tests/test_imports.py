@@ -27,7 +27,6 @@ def test_config_constants_match_docs():
     assert cfg.B_PRB == 360e3
     assert cfg.TTI_SEC == 0.5e-3
     assert cfg.F_CARRIER == 3.5e9
-    assert cfg.F_MEC == 10e9
 
     # Delay components
     assert cfg.D_FH == 0.1e-3

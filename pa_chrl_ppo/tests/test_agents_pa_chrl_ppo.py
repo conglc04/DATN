@@ -30,7 +30,7 @@ from agents.worker_agent import (
     WorkerCritic,
     decode_worker_action,
 )
-from utils.config import F_MEC, GAMMA_MANAGER, GAMMA_WORKER
+from utils.config import GAMMA_MANAGER, GAMMA_WORKER
 
 
 # ============================================================
@@ -123,18 +123,17 @@ def test_manager_act_returns_correct_shapes():
 
 
 def test_decode_manager_action_bounds():
-    """b_rrm ∈ [0,1], f_MEC ∈ [0, F_MEC]."""
+    """b_rrm ∈ [0,1] (MEC offload f_MEC removed — B0b)."""
     # Extreme positive raw
-    dec = decode_manager_action(np.array([10.0, 10.0], dtype=np.float32))
+    dec = decode_manager_action(np.array([10.0], dtype=np.float32))
     assert 0.999 <= dec["b_rrm"] <= 1.0
-    assert dec["f_mec"] <= F_MEC
+    assert "f_mec" not in dec
     # Extreme negative raw
-    dec = decode_manager_action(np.array([-10.0, -10.0], dtype=np.float32))
+    dec = decode_manager_action(np.array([-10.0], dtype=np.float32))
     assert 0.0 <= dec["b_rrm"] <= 1e-3
     # Zero raw → 0.5 sigmoid
-    dec = decode_manager_action(np.array([0.0, 0.0], dtype=np.float32))
+    dec = decode_manager_action(np.array([0.0], dtype=np.float32))
     assert abs(dec["b_rrm"] - 0.5) < 1e-5
-    assert abs(dec["f_mec"] - F_MEC / 2) < 1e-3
 
 
 # ============================================================
