@@ -1,14 +1,14 @@
 """Smoke training driver for baselines + Phase 3 sibling solvers.
 
 W07 refactor: dispatches between **NEW** LambdaState API (5-dim λ, used by
-TD3-Lag + SAC-Lag as Phase 3 siblings to PA-CHRL-PPO) and the **OLD**
+TD3 + SAC as Phase 3 siblings to PPO) and the **OLD**
 CMDPLagrangian API (2-dim λ, kept for ablation variants like b2_hrl_ppo_soft,
 pa_ppo_soft, ppo_cmdp_flat that are NOT Phase 3 siblings — only used in Exp6).
 
 Usage:
     python -m baselines.smoke_train --baseline static_slicing --episodes 100
-    python -m baselines.smoke_train --baseline sac_lag --episodes 100 --hard
-    python -m baselines.smoke_train --baseline td3_lag --episodes 100 --hard
+    python -m baselines.smoke_train --baseline sac --episodes 100 --hard
+    python -m baselines.smoke_train --baseline td3 --episodes 100 --hard
 """
 
 from __future__ import annotations
@@ -28,8 +28,8 @@ from utils.logger import Logger
 
 
 BASELINE_REGISTRY = {
-    "td3_lag":            "baselines.td3_lag:TD3LagBaseline",
-    "sac_lag":            "baselines.sac_lag:SACLagBaseline",
+    "td3":            "baselines.td3:TD3Baseline",
+    "sac":            "baselines.sac:SACBaseline",
 }
 
 

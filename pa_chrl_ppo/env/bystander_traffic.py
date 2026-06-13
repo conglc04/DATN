@@ -4,7 +4,7 @@ Reference: docs/02_requirements.md:51-53 (Sub-scenario S2B)
     When a collision happens at a crowded intersection, 30-50% of passers-by
     livestream → eMBB UE arrival ~30 baseline → 80-120 UEs (2-5 Mbps UL/UE).
 
-    This is the slice-isolation acid test: PA-CHRL-PPO must reject new eMBB via
+    This is the slice-isolation acid test: PPO must reject new eMBB via
     RAC and/or force handover to n28.
 
 Implements:

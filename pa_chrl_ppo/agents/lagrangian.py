@@ -1,7 +1,7 @@
 """LambdaState — 5-dim Lagrangian multipliers + λ_warm[φ] phase table.
 
 Standalone class independent of any RL algorithm (PPO/TD3/etc). Owns the dual
-state evolution for PA-CHRL-PPO per docs/13_methodology_walkthrough.md:
+state evolution for PPO per docs/13_methodology_walkthrough.md:
 
     - Phase 2.3.3 Dual update rule (projected gradient ascent)
     - Phase 2.3.5 Subgradient interval-window Option b
@@ -16,8 +16,8 @@ Key API:
     augmented_reward(r, c_vec, d_phi)   — r - Σ_j λ_local[j] · (c_j - d_j^φ_t)
 
 Used by:
-    - baselines/td3_lag.py, baselines/sac_lag.py (Phase 3 sibling solvers, W07/B7)
-    - agents/worker_agent.py (PA-CHRL-PPO, W08+)
+    - baselines/td3.py, baselines/sac.py (Phase 3 sibling solvers, W07/B7)
+    - agents/worker_agent.py (PPO, W08+)
     - train.py Algorithm 1 main loop (W09)
 """
 
@@ -58,7 +58,7 @@ def _default_warm_table() -> dict[int, np.ndarray]:
 
 @dataclass
 class LambdaState:
-    """Comprehensive Lagrangian state for PA-CHRL-PPO + flat baselines.
+    """Comprehensive Lagrangian state for PPO + flat baselines.
 
     Embeds Phase 3.4 critical fixes (docs/13):
       - Fix Error 1 (λ-Overwriting): phase transition syncs BOTH global + local

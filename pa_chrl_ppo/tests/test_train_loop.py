@@ -18,7 +18,7 @@ from train import (
     WORKER_STEPS_PER_EPISODE,
     build_manager_state,
     overlay_lambda_local,
-    train_pa_chrl_ppo,
+    train_ppo,
 )
 from utils.config import LAMBDA_LOCAL_OBS_INDEX
 
@@ -123,7 +123,7 @@ def test_episode_step_counts():
 @pytest.mark.slow
 def test_5_episode_smoke_no_nan(tmp_path):
     """Algorithm 1 runs 5 episodes without crash; all metrics finite."""
-    out = train_pa_chrl_ppo(
+    out = train_ppo(
         n_episodes=5,
         seed=0,
         log_dir=str(tmp_path / "logs"),
@@ -151,7 +151,7 @@ def test_5_episode_smoke_no_nan(tmp_path):
 @pytest.mark.slow
 def test_5_episode_lambda_global_non_trivial(tmp_path):
     """After 5 episodes with non-zero constraint signals, at least one λ_j > 0."""
-    out = train_pa_chrl_ppo(
+    out = train_ppo(
         n_episodes=5,
         seed=0,
         log_dir=str(tmp_path / "logs"),
@@ -171,7 +171,7 @@ def test_5_episode_lambda_global_non_trivial(tmp_path):
 def test_ppo_buffer_resets_each_episode(tmp_path):
     """worker/manager n_samples per episode should equal the per-episode rollout
     size (≤ 100/10) — confirming buffer is flushed at episode end (N8)."""
-    out = train_pa_chrl_ppo(
+    out = train_ppo(
         n_episodes=2,
         seed=1,
         log_dir=str(tmp_path / "logs"),

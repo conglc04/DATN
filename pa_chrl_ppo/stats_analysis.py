@@ -1,4 +1,4 @@
-"""Statistical analysis for the solver sweep: PA-CHRL-PPO vs TD3-Lag vs SAC-Lag.
+"""Statistical analysis for the solver sweep: PPO vs TD3 vs SAC.
 
 Tests:
 - Mann-Whitney U (non-parametric; appropriate for small n=10, distribution-agnostic)
@@ -30,9 +30,9 @@ from scipy import stats as sp_stats
 # ---------------------------------------------------------------------------
 
 _CSV_PREFIXES = {
-    "pa_chrl_ppo": "pa_chrl_ppo",
-    "td3_lag": "smoke_td3_lag",
-    "sac_lag": "smoke_sac_lag",
+    "ppo": "ppo",
+    "td3": "smoke_td3",
+    "sac": "smoke_sac",
 }
 
 
@@ -68,9 +68,9 @@ METRICS = [
 ]
 
 COMPARISONS = [
-    ("pa_chrl_ppo", "td3_lag",  "PA vs TD3"),
-    ("pa_chrl_ppo", "sac_lag",  "PA vs SAC"),
-    ("td3_lag",     "sac_lag",  "TD3 vs SAC"),
+    ("ppo", "td3",  "PA vs TD3"),
+    ("ppo", "sac",  "PA vs SAC"),
+    ("td3",     "sac",  "TD3 vs SAC"),
 ]
 
 
@@ -205,7 +205,7 @@ def analyse(log_dir: Path, n_seeds: int = 10) -> str:
         "| Method | ep_reward | e2e_ms | viol_rate | eMBB_Mbps | c3_viol |",
         "|---|---|---|---|---|---|",
     ]
-    for method in ["pa_chrl_ppo", "td3_lag", "sac_lag"]:
+    for method in ["ppo", "td3", "sac"]:
         row_vals = []
         for metric, _, _ in METRICS:
             v = [x for x in data[method][metric] if not math.isnan(x)]
@@ -216,7 +216,7 @@ def analyse(log_dir: Path, n_seeds: int = 10) -> str:
     lines += ["", "## Normality Check (Shapiro-Wilk, α=0.05)", ""]
     lines.append("| Method | Metric | W | p | Normal? |")
     lines.append("|---|---|---|---|---|")
-    for method in ["pa_chrl_ppo", "td3_lag", "sac_lag"]:
+    for method in ["ppo", "td3", "sac"]:
         for metric, mlabel, _ in METRICS:
             v = [x for x in data[method][metric] if not math.isnan(x)]
             if len(v) >= 3:
@@ -278,9 +278,9 @@ def analyse(log_dir: Path, n_seeds: int = 10) -> str:
 
     lines += [
         "",
-        "## PA-CHRL-PPO Advantage Summary",
+        "## PPO Advantage Summary",
         "",
-        f"PA-CHRL-PPO significantly outperforms baselines on **{len(pa_wins)}** metric-comparison pairs (Holm, α=0.05):",
+        f"PPO significantly outperforms baselines on **{len(pa_wins)}** metric-comparison pairs (Holm, α=0.05):",
         "",
     ]
     for r in pa_wins:

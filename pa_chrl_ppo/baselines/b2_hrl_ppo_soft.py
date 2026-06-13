@@ -1,6 +1,6 @@
 """B2 — HRL-PPO soft baseline.
 
-Same 2-level conceptual hierarchy as PA-CHRL-PPO, but with:
+Same 2-level conceptual hierarchy as PPO, but with:
     USE_PHASE_FSM    = False   (phase masked out of obs)
     USE_CMDP         = False   (no Lagrangian, soft penalty only)
 

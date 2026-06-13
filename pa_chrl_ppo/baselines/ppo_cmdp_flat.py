@@ -1,6 +1,6 @@
 """Ablation variant — Flat PPO with full CMDP ("w/o HRL" in Table II).
 
-Compared to PA-CHRL-PPO full:
+Compared to PPO full:
     Phase     ✓ (one-hot visible)
     HRL       ✗ (flat single-level, no Manager)
     CMDP      ✓ (full 5-dim Lagrangian)

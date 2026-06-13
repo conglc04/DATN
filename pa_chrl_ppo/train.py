@@ -1,4 +1,4 @@
-"""Algorithm 1 main training loop for PA-CHRL-PPO (W08).
+"""Algorithm 1 main training loop for PPO (W08).
 
 Strict pipeline (docs/13_methodology_walkthrough.md Phase 3.4.1):
     Outer FOR ep:
@@ -29,7 +29,7 @@ Implementation notes (Phase 3.4.4 N1–N9):
     N9  Phase transition handled in LambdaState.on_manager_step_start (sync BOTH)
 
 Usage:
-    python train.py --algo pa_chrl_ppo --episodes 5 --seed 0 --hard
+    python train.py --algo ppo --episodes 5 --seed 0 --hard
     python train.py --smoke-test --seed 42
 """
 
@@ -67,11 +67,6 @@ from utils.logger import Logger
 
 MANAGER_STEPS_PER_EPISODE: int = 10
 WORKER_STEPS_PER_EPISODE: int = MANAGER_STEPS_PER_EPISODE * WORKER_STEPS_PER_MANAGER  # = 100
-
-
-# ============================================================
-# β_qp anneal (Phase 3.2.2)
-# ============================================================
 
 
 # ============================================================
@@ -121,11 +116,11 @@ def overlay_lambda_local(obs: np.ndarray, lambda_local: np.ndarray) -> np.ndarra
 
 
 # ============================================================
-# Algorithm 1 — PA-CHRL-PPO training
+# Algorithm 1 — PPO training
 # ============================================================
 
 
-def train_pa_chrl_ppo(
+def train_ppo(
     n_episodes: int,
     seed: int = 0,
     log_dir: str = "logs",
@@ -156,7 +151,7 @@ def train_pa_chrl_ppo(
         f"Worker obs dim {state_dim_l} != {WORKER_STATE_DIM_DEFAULT}"
     )
 
-    # --- Setup agents (PA-CHRL-PPO + LambdaState) ---
+    # --- Setup agents (PPO + LambdaState) ---
     manager = ManagerAgent(
         state_dim=MANAGER_STATE_DIM_DEFAULT,
         action_dim=MANAGER_ACTION_DIM_DEFAULT,
@@ -183,13 +178,13 @@ def train_pa_chrl_ppo(
 
     # --- Setup logger ---
     logger = Logger(
-        run_name=f"pa_chrl_ppo_seed{seed}",
+        run_name=f"ppo_seed{seed}",
         log_dir=log_dir,
         use_tensorboard=False,
         use_wandb=use_wandb,
     )
     logger.log_hparams({
-        "algo": "pa_chrl_ppo",
+        "algo": "ppo",
         "n_episodes": n_episodes,
         "seed": seed,
         "state_dim_l": state_dim_l,
@@ -315,7 +310,7 @@ def train_pa_chrl_ppo(
             elapsed = time.time() - t_start
             es_tag = f"  no_improve={es._no_improve_eps}" if es else ""
             print(
-                f"[pa_chrl_ppo] ep {ep + 1}/{n_episodes}  "
+                f"[ppo] ep {ep + 1}/{n_episodes}  "
                 f"R={ep_reward:+.2f}  e2e={metrics['mean_e2e_ms']:.3f}ms  "
                 f"viol={metrics['viol_rate']:.4f}  "
                 f"lambda_mean={float(np.mean(lam_g)):.3f}"
@@ -325,29 +320,29 @@ def train_pa_chrl_ppo(
         # Eval checkpoint + early stopping
         if es is not None:
             es.maybe_save_eval(ep, metrics, log_dir, eval_at=eval_at,
-                               run_name=f"pa_chrl_ppo_seed{seed}")
+                               run_name=f"ppo_seed{seed}")
             if es.step(ep, ep_reward):
                 print(
-                    f"[pa_chrl_ppo] EARLY STOP at ep {ep + 1}  "
+                    f"[ppo] EARLY STOP at ep {ep + 1}  "
                     f"rolling_mean={es.rolling_mean:+.2f}  "
                     f"no_improve={es._no_improve_eps} >= patience={es.patience}"
                 )
                 break
         elif eval_at > 0 and (ep + 1) == eval_at:
-            _save_eval_snapshot(ep, metrics, log_dir, f"pa_chrl_ppo_seed{seed}", eval_at)
+            _save_eval_snapshot(ep, metrics, log_dir, f"ppo_seed{seed}", eval_at)
 
     # Save summary
     summary = dict(final_stats)
-    summary["algo"] = "pa_chrl_ppo"
+    summary["algo"] = "ppo"
     summary["seed"] = seed
     summary["n_episodes"] = n_episodes
     summary["final_lambda_warm"] = {
         int(k): v.tolist() for k, v in lambda_state.get_lambda_warm_table_snapshot().items()
     }
-    summary_path = Path(log_dir) / f"summary_pa_chrl_ppo_seed{seed}.json"
+    summary_path = Path(log_dir) / f"summary_ppo_seed{seed}.json"
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(json.dumps(summary, indent=2, default=float), encoding="utf-8")
-    print(f"[pa_chrl_ppo] DONE — summary saved to {summary_path}")
+    print(f"[ppo] DONE — summary saved to {summary_path}")
 
     logger.close()
     env.close()
@@ -474,12 +469,12 @@ def smoke_test(args: argparse.Namespace) -> int:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="PA-CHRL-PPO training entry point")
+    parser = argparse.ArgumentParser(description="PPO training entry point")
     parser.add_argument(
         "--algo",
         type=str,
-        default="pa_chrl_ppo",
-        choices=["pa_chrl_ppo", "td3_lag", "sac_lag", "static_slicing",
+        default="ppo",
+        choices=["ppo", "td3", "sac", "static_slicing",
                  "b2_hrl_ppo_soft", "pa_ppo_soft", "no_phase_chrl_ppo", "ppo_cmdp_flat"],
     )
     parser.add_argument("--seed", type=int, default=0)
@@ -533,8 +528,8 @@ def main() -> int:
     if args.smoke_test:
         return smoke_test(args)
 
-    if args.algo == "pa_chrl_ppo":
-        train_pa_chrl_ppo(
+    if args.algo == "ppo":
+        train_ppo(
             n_episodes=args.episodes,
             seed=args.seed,
             log_dir=str(args.log_dir),

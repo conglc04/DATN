@@ -1,4 +1,4 @@
-"""ORANEnv — Gymnasium-compatible environment for PA-CHRL-PPO.
+"""ORANEnv — Gymnasium-compatible environment for PPO.
 
 Integrates all Week 2-3 modules into a TTI-level simulator:
     - Channel: SINR per UE per cell
@@ -218,7 +218,7 @@ def hard_mission_config(
         urllc_arrival_rate=50.0,
         # Critical: tiny URLLC PRB budget at start (mirrors φ₁ STANDBY profile).
         # Static policy keeps this throughout the whole 1-second mission and
-        # therefore cannot serve the φ₃ burst. PA-CHRL-PPO is expected to
+        # therefore cannot serve the φ₃ burst. PPO is expected to
         # raise r_min during φ₃ via the phase-aware action.
         # Calibration: at hint=0.02 with SINR clamp 15 dB and burst factor 50,
         # peak ρ ≈ 0.85 during φ₃ → mean D_e2e ≈ 1.5-2 ms on burst TTI
@@ -228,7 +228,7 @@ def hard_mission_config(
 
 
 class ORANEnv(gym.Env):
-    """Single-cell PA-CHRL-PPO TTI-level environment (Worker timescale)."""
+    """Single-cell PPO TTI-level environment (Worker timescale)."""
 
     metadata = {"render_modes": []}
 

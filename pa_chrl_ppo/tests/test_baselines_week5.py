@@ -140,7 +140,7 @@ class TestPhaseMask:
     [
         ("baselines.static_slicing",    "StaticSlicingBaseline"),
         ("baselines.b2_hrl_ppo_soft",   "B2HRLPPOSoftBaseline"),
-        ("baselines.sac_lag",           "SACLagBaseline"),
+        ("baselines.sac",           "SACBaseline"),
         ("baselines.pa_ppo_soft",       "PAPPOSoftBaseline"),
         ("baselines.no_phase_chrl_ppo", "NoPhaseCHRLPPOBaseline"),
         ("baselines.ppo_cmdp_flat",     "PPOCMDPFlatBaseline"),
@@ -184,11 +184,11 @@ class TestPhaseFlagSemantics:
         out = agent.maybe_mask(obs)
         np.testing.assert_array_equal(out, obs)
 
-    def test_sac_lag_has_5dim_lambda(self):
-        """SAC-Lag (B7): 5-dim λ via LambdaState (Phase 3 sibling solver to
-        PA-CHRL-PPO + TD3-Lag, applied AFTER Phase 2 statement complete)."""
-        from baselines.sac_lag import SACLagBaseline
-        agent = SACLagBaseline(state_dim=40, action_dim=6, seed=0)
+    def test_sac_has_5dim_lambda(self):
+        """SAC (B7): 5-dim λ via LambdaState (Phase 3 sibling solver to
+        PPO + TD3, applied AFTER Phase 2 statement complete)."""
+        from baselines.sac import SACBaseline
+        agent = SACBaseline(state_dim=40, action_dim=6, seed=0)
         assert agent.lambda_state.n_constraints == 5
         # Old 2-dim API removed
         assert not hasattr(agent, "lagrangian")
@@ -226,10 +226,10 @@ class TestSmokeTrainOneEpisode:
         assert np.isfinite(stats["ep_reward"])
         assert np.isfinite(stats["mean_e2e_ms"])
 
-    def test_sac_lag(self):
-        """SAC-Lag — Phase 3 sibling solver (5-dim λ via LambdaState)."""
-        self._run_one("sac_lag")
+    def test_sac(self):
+        """SAC — Phase 3 sibling solver (5-dim λ via LambdaState)."""
+        self._run_one("sac")
 
-    def test_td3_lag(self):
-        """TD3-Lag — Phase 3 sibling solver (5-dim λ via LambdaState)."""
-        self._run_one("td3_lag")
+    def test_td3(self):
+        """TD3 — Phase 3 sibling solver (5-dim λ via LambdaState)."""
+        self._run_one("td3")

@@ -347,7 +347,7 @@ def get_phase_alpha(phi: int) -> tuple[float, float]:
 def summary() -> str:
     """One-line summary for sanity checking."""
     return (
-        f"PA-CHRL-PPO config: P_total={P_TOTAL} PRB, "
+        f"PPO config: P_total={P_TOTAL} PRB, "
         f"B_PRB={B_PRB/1e3:.0f}kHz, "
         f"f_c={F_CARRIER/1e9:.1f}GHz, "
         f"phases={len(PHASE_QOS)}, "

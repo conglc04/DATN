@@ -1,4 +1,4 @@
-"""Manager agent (rApp π_H) for PA-CHRL-PPO.
+"""Manager agent (rApp π_H) for PPO.
 
 Phase 3.3.1 / 3.3.2: high-level policy operating on coarse multi-cell aggregate
 state every Manager step (T_H = 100 ms sim = 10 Worker steps).

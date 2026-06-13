@@ -1,6 +1,6 @@
 """Ablation variant — CHRL-PPO minus phase ("w/o Phase" in Table II).
 
-Compared to PA-CHRL-PPO full:
+Compared to PPO full:
     Phase     ✗ (one-hot zeroed out — agent does not know which phase)
     HRL       ✓ (conceptual; Manager hint preserved)
     CMDP      ✓ (full 5-dim Lagrangian)

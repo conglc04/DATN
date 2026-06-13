@@ -1,4 +1,4 @@
-"""Worker agent (xApp π_L) for PA-CHRL-PPO.
+"""Worker agent (xApp π_L) for PPO.
 
 Phase 3.3.3 / 3.3.4: low-level policy operating on full Worker state (33-dim
 for K=1, F=4) every Worker step (T_L = 10 ms sim = 20 MAC ticks).

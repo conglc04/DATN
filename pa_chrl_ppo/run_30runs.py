@@ -10,7 +10,7 @@ Usage:
     python run_30runs.py                          # 30 jobs × 5000 ep, early stop on
     python run_30runs.py --episodes 1000          # shorter run
     python run_30runs.py --no-early-stop          # disable early stopping
-    python run_30runs.py --methods pa_chrl_ppo    # single method (10 runs)
+    python run_30runs.py --methods ppo    # single method (10 runs)
     python run_30runs.py --seeds 0,1,2            # subset seeds
     python run_30runs.py --dry-run                # print commands only
 """
@@ -27,7 +27,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent
 LOG_DIR_DEFAULT = REPO_ROOT / "logs_review_30runs"
 
-DEFAULT_METHODS = ["pa_chrl_ppo", "td3_lag", "sac_lag"]
+DEFAULT_METHODS = ["ppo", "td3", "sac"]
 DEFAULT_SEEDS = list(range(10))
 
 
@@ -37,7 +37,7 @@ def parse_args() -> argparse.Namespace:
         "--methods",
         type=str,
         default=",".join(DEFAULT_METHODS),
-        help="Comma-separated algo names (default: pa_chrl_ppo,td3_lag,sac_lag)",
+        help="Comma-separated algo names (default: ppo,td3,sac)",
     )
     p.add_argument(
         "--seeds",
@@ -80,9 +80,9 @@ def run_single(method: str, seed: int, args: argparse.Namespace) -> tuple[bool, 
     resume_ckpt = None
     if args.resume_from is not None:
         prefix_map = {
-            "pa_chrl_ppo": "pa_chrl_ppo",
-            "td3_lag": "td3_lag",
-            "sac_lag": "sac_lag",
+            "ppo": "ppo",
+            "td3": "td3",
+            "sac": "sac",
         }
         ckpt_name = f"{prefix_map.get(method, method)}_seed{seed}_ep{args.resume_start_ep}.pt"
         resume_ckpt = args.resume_from / "checkpoints" / ckpt_name
@@ -126,7 +126,7 @@ def run_single(method: str, seed: int, args: argparse.Namespace) -> tuple[bool, 
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,
-            timeout=7200,  # 2-hour cap per run (TD3-Lag at 5000ep needs ~5500s without ES)
+            timeout=7200,  # 2-hour cap per run (TD3 at 5000ep needs ~5500s without ES)
         )
         elapsed = time.time() - start
         ok = result.returncode == 0

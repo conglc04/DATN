@@ -62,7 +62,7 @@ def run_variant(variant: str, seed: int, args: argparse.Namespace) -> tuple[bool
         "utf8",
         str(REPO_ROOT / "train.py"),
         "--algo",
-        "pa_chrl_ppo",
+        "ppo",
         "--episodes",
         str(args.episodes),
         "--seed",
@@ -126,7 +126,7 @@ def analyze_reconverge(args: argparse.Namespace) -> str:
 
     for variant in ("with_warm", "without_warm"):
         for seed in seeds:
-            summary_path = args.log_dir / variant / f"summary_pa_chrl_ppo_seed{seed}.json"
+            summary_path = args.log_dir / variant / f"summary_ppo_seed{seed}.json"
             if summary_path.exists():
                 with summary_path.open() as f:
                     aggregates[variant].append(json.load(f))
@@ -167,7 +167,7 @@ def analyze_reconverge(args: argparse.Namespace) -> str:
     converge_without = []
     for variant, store in [("with_warm", converge_with), ("without_warm", converge_without)]:
         for seed in seeds:
-            csv_path = args.log_dir / variant / f"pa_chrl_ppo_seed{seed}" / "metrics.csv"
+            csv_path = args.log_dir / variant / f"ppo_seed{seed}" / "metrics.csv"
             if not csv_path.exists():
                 md_lines.append(f"| {variant} | {seed} | (no CSV) | — |")
                 continue

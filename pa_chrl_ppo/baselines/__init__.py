@@ -1,8 +1,8 @@
 """Sibling solvers + Exp6 ablation variants.
 
-Sibling solvers (Table I, alongside PA-CHRL-PPO):
-    td3_lag              — off-policy TD3 + Lagrangian (deterministic actor)
-    sac_lag              — off-policy SAC + Lagrangian (max-entropy stochastic actor)
+Sibling solvers (Table I, alongside PPO):
+    td3              — off-policy TD3 + Lagrangian (deterministic actor)
+    sac              — off-policy SAC + Lagrangian (max-entropy stochastic actor)
 
 Lower-bound + Exp6 ablation variants (NOT in Table I):
     static_slicing       — Fixed 50/50 PRB (lower bound)

@@ -1,4 +1,4 @@
-"""W07 — Phase 3 PA-CHRL-PPO solver tests.
+"""W07 — Phase 3 PPO solver tests.
 
 Verifies:
     - ppo_core utilities (compute_gae, ppo_clip_loss, value_loss, entropy_bonus)
