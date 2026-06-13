@@ -1,0 +1,28 @@
+[project]
+name = "pa-chrl-ppo"
+version = "0.1.0"
+description = "Phase-Aware Constrained Hierarchical RL with PPO for O-RAN ambulance slicing (Hanoi)"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "PA-CHRL-PPO Research" }]
+
+[build-system]
+requires = ["setuptools>=65"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["env*", "agents*", "baselines*", "experiments*", "utils*"]
+exclude = ["tests*", "data*", "logs*", "checkpoints*", "figures*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-ra -q"
+markers = [
+    "slow: integration test that runs a full episode (uses live env + PPO updates)",
+]
+
+[tool.coverage.run]
+source = ["env", "agents", "baselines", "experiments", "utils"]
+omit = ["*/__init__.py", "tests/*"]

@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual envs (case-insensitive on Windows — don't list "ENV/" or "env/"
+# because that would also match the env/ package directory)
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Experiment artifacts — ignore contents but keep folders via .gitkeep
+checkpoints/*
+!checkpoints/.gitkeep
+logs/*
+!logs/.gitkeep
+wandb/
+runs/
+*.ckpt
+*.pt
+*.pth
+
+# Data (large or generated)
+data/synthetic_traces/*
+!data/synthetic_traces/.gitkeep
+data/hanoi_calibration/*.csv
+!data/hanoi_calibration/.gitkeep
+
+# Figures (generated)
+figures/*.png
+figures/*.pdf
+figures/*.svg
+!figures/.gitkeep
+
+# Misc
+*.log
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/

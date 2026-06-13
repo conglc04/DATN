@@ -1,0 +1,58 @@
+"""Ablation variant — CHRL-PPO minus phase ("w/o Phase" in Table II).
+
+Compared to PA-CHRL-PPO full:
+    Phase     ✗ (one-hot zeroed out — agent does not know which phase)
+    HRL       ✓ (conceptual; Manager hint preserved)
+    CMDP      ✓ (full 5-dim Lagrangian)
+    Safety QP ✓ (placeholder for Week 5; real NSF lands Week 10)
+
+Used to isolate the value of explicit phase signaling.
+Reference: docs/06_validation.md ablation Table.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+
+from agents.ppo_agent import PPOAgent
+from baselines._common import BaselineFlags, CMDPLagrangian, mask_phase
+
+
+class NoPhaseCHRLPPOBaseline:
+    name = "no_phase_chrl_ppo"
+    FLAGS = BaselineFlags(use_phase=False, use_cmdp=True, use_hrl=True, n_constraints=5)
+
+    def __init__(self, state_dim: int, action_dim: int = 6, seed: int = 0,
+                 alpha_lambda: float = 0.01, device: str = "cpu"):
+        self.flags = self.FLAGS
+        self.ppo = PPOAgent(state_dim, action_dim,
+                            actor_hidden=(256, 128, 64),
+                            critic_hidden=(256, 128, 64),
+                            seed=seed, device=device)
+        self.lagrangian = CMDPLagrangian(n=5, alpha=alpha_lambda)
+
+    def maybe_mask(self, obs):
+        return mask_phase(obs)
+
+    def select_action(self, obs, deterministic: bool = False):
+        return self.ppo.select_action(self.maybe_mask(obs), deterministic=deterministic)
+
+    def augment_reward(self, reward: float, constraints=None) -> float:
+        if constraints is None:
+            return reward
+        return float(reward - self.lagrangian.penalty(constraints))
+
+    def update_lambdas(self, mean_constraints) -> None:
+        self.lagrangian.step(mean_constraints)
+
+    def update(self, buffer) -> dict:
+        out = self.ppo.update(buffer)
+        for j in range(self.flags.n_constraints):
+            out[f"lambda_{j+1}"] = float(self.lagrangian.lambdas[j])
+        return out
+
+    def save(self, path: str) -> None:
+        self.ppo.save(path)
+
+    def load(self, path: str) -> None:
+        self.ppo.load(path)
