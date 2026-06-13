@@ -3,7 +3,6 @@
 Same 2-level conceptual hierarchy as PA-CHRL-PPO, but with:
     USE_PHASE_FSM    = False   (phase masked out of obs)
     USE_CMDP         = False   (no Lagrangian, soft penalty only)
-    USE_SAFETY_QP    = False   (no NSF/OSQP filter)
 
 Reference: docs/06_validation.md:16-28
     The "HRL" part for Week 5 is conceptual — actual Manager/Worker net split

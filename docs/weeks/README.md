@@ -14,7 +14,7 @@
 | [W04](W04_oran_env_sanity.md) | ORANEnv + sanity (obs K=1=33) | G1 |
 | [W05](W05_reward_constraint_tracking.md) | Reward single-term + 5-constraint tracking | G2.1 |
 | [W06](W06_lagrangian_standalone.md) | Lagrangian standalone (Pha 2 complete) | G2 |
-| [W07](W07_apply_three_solvers.md) | 3 solver: PA-CHRL-PPO + TD3-Lag + B3 | G3.1 |
+| [W07](W07_apply_three_solvers.md) | 3 solver: PA-CHRL-PPO + TD3-Lag + SAC-Lag | G3.1 |
 | [W08](W08_training_loop.md) | Algorithm 1 training loop | G3.2 |
 | [W09](W09_smoke_phase3_gate.md) | 100-ep smoke + Pha 3 verify (β_qp GỠ) | G3 |
 | [W10](W10_tune_multiseed_prep.md) | Tune + multiseed prep | G3.3 |

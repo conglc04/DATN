@@ -3,9 +3,8 @@
 > **Pha**: GĐ A (code foundation) · **Status**: ✅ DONE · **Gate**: **G3 — Pha 3 verified empirically** · **Deps**: W08/G3.2
 
 ## Đã xây / verify
-- 100-ep smoke cho PA-CHRL-PPO + B3 + TD3-Lag.
-- Verify constraint dynamics: **B3 URLLC corner** (viol_C1+C2 thấp, viol_C3 cao), **TD3 eMBB corner** (ngược lại); λ-trajectory khớp active-set theo phase (λ_1+λ_2 > λ_3 @ φ₃).
-- `baselines/plot_phase3_comparison.py`.
+- 100-ep smoke cho PA-CHRL-PPO + TD3-Lag + SAC-Lag (B3-RCPO cũ đã loại).
+- Verify constraint dynamics: **URLLC corner** (viol_C1+C2 thấp, viol_C3 cao) vs **eMBB corner** (ngược lại); λ-trajectory khớp active-set theo phase (λ_1+λ_2 > λ_3 @ φ₃).
 
 ## Đã GỠ (post-cleanup, master plan D13)
 - ❌ **β_qp sweep** (113-run β_qp diagnostic) — gỡ hoàn toàn cùng NSF-distillation; safety filter → closed-form projection (no learnable β_qp). KHÔNG còn trong scope.

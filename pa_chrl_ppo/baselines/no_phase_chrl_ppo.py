@@ -4,7 +4,6 @@ Compared to PA-CHRL-PPO full:
     Phase     ✗ (one-hot zeroed out — agent does not know which phase)
     HRL       ✓ (conceptual; Manager hint preserved)
     CMDP      ✓ (full 5-dim Lagrangian)
-    Safety QP ✓ (placeholder for Week 5; real NSF lands Week 10)
 
 Used to isolate the value of explicit phase signaling.
 Reference: docs/06_validation.md ablation Table.

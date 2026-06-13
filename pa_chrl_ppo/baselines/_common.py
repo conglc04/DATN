@@ -24,7 +24,6 @@ class BaselineFlags:
     use_phase: bool = True          # phase one-hot visible in obs?
     use_cmdp: bool = False          # Lagrangian-augmented reward?
     use_hrl: bool = False           # 2-level Manager/Worker scheduling? (placeholder)
-    use_safety_qp: bool = False     # NSF/OSQP runtime safety? (placeholder)
     n_constraints: int = 0          # 0 (no CMDP), 2 (c1, c2 only), 5 (full)
 
 

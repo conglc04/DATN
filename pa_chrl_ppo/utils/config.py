@@ -305,16 +305,6 @@ HANDOVER_ETA_TRIGGER: Final[float] = 10.0   # seconds; pre-allocate when ETA < 1
 # Pre-tightening
 PRE_TIGHTEN_ETA: Final[float] = 30.0        # seconds; apply D_max^φ_next if ETA_next < 30s
 
-# ============================================================
-# LSTM specs
-# Reference: docs/05_agent_workflow.md#lstm
-# ============================================================
-LSTM_HIDDEN_1: Final[int] = 64
-LSTM_HIDDEN_2: Final[int] = 32
-LSTM_HEADS: Final[int] = 6   # P_overload, PRB_demand, BLER, trajectory, ETA, target_cell_id
-LSTM_LOOKBACK_SEC: Final[float] = 30.0
-LSTM_INFERENCE_PERIOD_MS: Final[float] = 500.0
-
 
 def get_phase_thresholds(phi: int) -> dict[str, float]:
     """Master Table helper — per-step phase threshold lookup (docs/13 Phase 1.3).
