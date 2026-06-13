@@ -475,7 +475,7 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="ppo",
         choices=["ppo", "td3", "sac", "static_slicing",
-                 "b2_hrl_ppo_soft", "pa_ppo_soft", "no_phase_chrl_ppo", "ppo_cmdp_flat"],
+                 "b2_hrl_ppo_soft", "pa_ppo_soft", "no_phase_ppo", "ppo_cmdp_flat"],
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--episodes", type=int, default=10000)
@@ -484,7 +484,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint-dir", type=Path, default=Path("checkpoints"))
     parser.add_argument("--checkpoint-every", type=int, default=500)
     parser.add_argument("--resume-checkpoint", type=str, default=None,
-                        help="Path to .pt checkpoint to resume from (baselines only)")
+                        help="Path to .pt checkpoint to resume from (solvers only)")
     parser.add_argument("--resume-start-ep", type=int, default=0,
                         help="Episode offset when resuming (metrics appended after this ep)")
     parser.add_argument("--log-dir", type=Path, default=Path("logs"))
@@ -552,8 +552,8 @@ def main() -> int:
         )
         return 0
 
-    # Baselines / ablations delegate to baselines.smoke_train
-    from baselines.smoke_train import train as bl_train
+    # Baselines / ablations delegate to solvers.smoke_train
+    from solvers.smoke_train import train as bl_train
     bl_train(
         baseline_name=args.algo,
         n_episodes=args.episodes,

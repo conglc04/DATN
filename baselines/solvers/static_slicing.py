@@ -17,7 +17,7 @@ class StaticSlicingBaseline:
     name = "static_slicing"
 
     def __init__(self, state_dim: int, action_dim: int = 6, seed: int = 0, **_kwargs):
-        # Accept (and ignore) device / extra kwargs for parity with PPO-based baselines.
+        # Accept (and ignore) device / extra kwargs for parity with PPO-based solvers.
         self.state_dim = state_dim
         self.action_dim = action_dim
         self._seed = seed

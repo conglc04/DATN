@@ -1,6 +1,6 @@
 """Generic PPO actor-critic.
 
-Week 5 scope: minimal but functional implementation for baselines smoke-train.
+Week 5 scope: minimal but functional implementation for solvers smoke-train.
 Week 8 will extend with Manager/Worker hierarchical specifics.
 
 Reference:

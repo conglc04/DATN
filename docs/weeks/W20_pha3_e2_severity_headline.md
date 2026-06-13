@@ -1,6 +1,6 @@
 # W20 — Pha 3: TD3 solver run, K=1
 
-> **Pha**: 3 · **Status**: 📅 PLANNED · **Gate**: **GATE 3C** · **Solver**: TD3 (off-policy) · **K**: 1 (1 xe cứu thương) · **Build**: B6 (`agents/td3_agent.py` + `baselines/td3.py`, đã có sẵn) · **Deps**: GATE 3B
+> **Pha**: 3 · **Status**: 📅 PLANNED · **Gate**: **GATE 3C** · **Solver**: TD3 (off-policy) · **K**: 1 (1 xe cứu thương) · **Build**: B6 (`agents/td3_agent.py` + `solvers/td3.py`, đã có sẵn) · **Deps**: GATE 3B
 
 ## Env config (giống W18/W19, KHÔNG đổi)
 gNB/cell-center = `(0,0)`, R_cell=300m, UMi 3GPP TR 38.901, single-cell, no handover. `K_ambulances=1` → obs=33 (như W18).

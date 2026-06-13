@@ -4,7 +4,7 @@
 
 ## Đã xây
 - `train.py` — Algorithm 1 đầy đủ (Manager/Worker rollout, GAE, PPO update, LambdaState augmented reward).
-- `baselines/smoke_train.py` — smoke cho td3 + sac.
+- `solvers/smoke_train.py` — smoke cho td3 + sac.
 - `tests/test_train_loop.py` — 5-ep smoke.
 
 ## Gate G3.2 ✅

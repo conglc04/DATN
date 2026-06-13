@@ -1,4 +1,4 @@
-"""Smoke training driver for baselines + Phase 3 sibling solvers.
+"""Smoke training driver for solvers + Phase 3 sibling solvers.
 
 W07 refactor: dispatches between **NEW** LambdaState API (5-dim λ, used by
 TD3 + SAC as Phase 3 siblings to PPO) and the **OLD**
@@ -6,9 +6,9 @@ CMDPLagrangian API (2-dim λ, kept for ablation variants like b2_hrl_ppo_soft,
 pa_ppo_soft, ppo_cmdp_flat that are NOT Phase 3 siblings — only used in Exp6).
 
 Usage:
-    python -m baselines.smoke_train --baseline static_slicing --episodes 100
-    python -m baselines.smoke_train --baseline sac --episodes 100 --hard
-    python -m baselines.smoke_train --baseline td3 --episodes 100 --hard
+    python -m solvers.smoke_train --baseline static_slicing --episodes 100
+    python -m solvers.smoke_train --baseline sac --episodes 100 --hard
+    python -m solvers.smoke_train --baseline td3 --episodes 100 --hard
 """
 
 from __future__ import annotations
@@ -28,8 +28,8 @@ from utils.logger import Logger
 
 
 BASELINE_REGISTRY = {
-    "td3":            "baselines.td3:TD3Baseline",
-    "sac":            "baselines.sac:SACBaseline",
+    "td3":            "solvers.td3:TD3Baseline",
+    "sac":            "solvers.sac:SACBaseline",
 }
 
 
@@ -158,7 +158,7 @@ def train(
                     agent.compute_constraints(recent_d_e2e)
                     aug = agent.augment_reward(float(reward), recent_d_e2e)
                 else:
-                    from baselines._common import estimate_constraints
+                    from solvers._common import estimate_constraints
                     cons = estimate_constraints(
                         recent_d_e2e, embb_mbps=20.0,
                         aoi_samples=None, phase=initial_phase,
@@ -214,7 +214,7 @@ def train(
 
         # OLD API: dual-ascent at end of episode (NOT per Manager step)
         if has_old_lagrangian and not has_lambda_state:
-            from baselines._common import estimate_constraints
+            from solvers._common import estimate_constraints
             cons_ep = estimate_constraints(
                 env.e2e_history, embb_mbps=20.0,
                 aoi_samples=None, phase=initial_phase,
@@ -326,7 +326,7 @@ def train(
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="Smoke training for baselines")
+    p = argparse.ArgumentParser(description="Smoke training for solvers")
     p.add_argument("--baseline", required=True, choices=list(BASELINE_REGISTRY))
     p.add_argument("--episodes", type=int, default=100)
     p.add_argument("--seed", type=int, default=0)

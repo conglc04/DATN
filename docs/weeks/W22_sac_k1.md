@@ -1,13 +1,13 @@
 # W22 — Pha 3: SAC solver code + run, K=1
 
-> **Pha**: 3 · **Status**: 📅 PLANNED · **Gate**: **GATE 3E** · **Solver**: SAC (off-policy, max-entropy) · **K**: 1 (1 xe cứu thương) · **Build**: B7 (NEW: `agents/sac_agent.py` + `baselines/sac.py`) · **Deps**: GATE 3D
+> **Pha**: 3 · **Status**: 📅 PLANNED · **Gate**: **GATE 3E** · **Solver**: SAC (off-policy, max-entropy) · **K**: 1 (1 xe cứu thương) · **Build**: B7 (NEW: `agents/sac_agent.py` + `solvers/sac.py`) · **Deps**: GATE 3D
 
 ## Env config (giống W18/W20, KHÔNG đổi)
 gNB/cell-center = `(0,0)`, R_cell=300m, UMi 3GPP TR 38.901, single-cell, no handover. `K_ambulances=1` → obs=33.
 
 ## B7 — Code SAC (sibling thứ 3, mirror TD3)
 - **B7.1** `agents/sac_agent.py` — ✅[Haarnoja et al. 2018 "Soft Actor-Critic" (ICML); Haarnoja et al. 2018 "SAC Algorithms and Applications" (arXiv:1812.05905)]. Stochastic tanh-Gaussian actor (reparameterization, log_prob với tanh-correction), twin Q-critic + target (Polyak τ=0.005), automatic entropy temperature `α` (target entropy = `-action_dim`), replay buffer (reuse `ReplayBuffer` từ `td3_agent.py`).
-- **B7.2** `baselines/sac.py` — `SACBaseline` (`name="sac"`), mirror `TD3Baseline`: cùng `BaselineFlags(use_phase=False, use_cmdp=True, use_hrl=False, n_constraints=5)`, cùng `LambdaState` 5-dim λ lifecycle (`on_episode_start`, `on_manager_step_start`, `accumulate_constraint`, `on_manager_step_end`, `augment_reward`), `mask_phase`, `select_action()` trả `(action, log_prob, value)` để khớp PPO API.
+- **B7.2** `solvers/sac.py` — `SACBaseline` (`name="sac"`), mirror `TD3Baseline`: cùng `BaselineFlags(use_phase=False, use_cmdp=True, use_hrl=False, n_constraints=5)`, cùng `LambdaState` 5-dim λ lifecycle (`on_episode_start`, `on_manager_step_start`, `accumulate_constraint`, `on_manager_step_end`, `augment_reward`), `mask_phase`, `select_action()` trả `(action, log_prob, value)` để khớp PPO API.
 - **B7.3** Smoke test: actor/critic forward pass đúng shape, `update()` trả `critic_loss`/`actor_loss`/`alpha_loss`/`alpha`, `save`/`load` roundtrip.
 
 ## A-SAC — SAC solver run, K=1

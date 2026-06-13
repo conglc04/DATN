@@ -280,7 +280,7 @@ def analyse(log_dir: Path, n_seeds: int = 10) -> str:
         "",
         "## PPO Advantage Summary",
         "",
-        f"PPO significantly outperforms baselines on **{len(pa_wins)}** metric-comparison pairs (Holm, α=0.05):",
+        f"PPO significantly outperforms solvers on **{len(pa_wins)}** metric-comparison pairs (Holm, α=0.05):",
         "",
     ]
     for r in pa_wins:

@@ -16,7 +16,7 @@ Key API:
     augmented_reward(r, c_vec, d_phi)   — r - Σ_j λ_local[j] · (c_j - d_j^φ_t)
 
 Used by:
-    - baselines/td3.py, baselines/sac.py (Phase 3 sibling solvers, W07/B7)
+    - solvers/td3.py, solvers/sac.py (Phase 3 sibling solvers, W07/B7)
     - agents/worker_agent.py (PPO, W08+)
     - train.py Algorithm 1 main loop (W09)
 """
@@ -58,7 +58,7 @@ def _default_warm_table() -> dict[int, np.ndarray]:
 
 @dataclass
 class LambdaState:
-    """Comprehensive Lagrangian state for PPO + flat baselines.
+    """Comprehensive Lagrangian state for PPO + flat solvers.
 
     Embeds Phase 3.4 critical fixes (docs/13):
       - Fix Error 1 (λ-Overwriting): phase transition syncs BOTH global + local

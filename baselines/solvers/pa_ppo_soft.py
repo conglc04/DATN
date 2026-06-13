@@ -15,7 +15,7 @@ from __future__ import annotations
 import numpy as np
 
 from agents.ppo_agent import PPOAgent
-from baselines._common import BaselineFlags
+from solvers._common import BaselineFlags
 
 
 BETA_SOFT_DEFAULT: float = 20.0

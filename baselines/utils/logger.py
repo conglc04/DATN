@@ -29,7 +29,7 @@ class Logger:
         log_dir: str | Path = "logs",
         use_tensorboard: bool = True,
         use_wandb: bool = False,
-        wandb_project: str = "pa-chrl-ppo",
+        wandb_project: str = "baselines",
         wandb_config: dict[str, Any] | None = None,
         append_csv: bool = False,  # If True, load existing metrics.csv and append
     ) -> None:

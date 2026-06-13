@@ -1,4 +1,4 @@
-"""Ablation variant — CHRL-PPO minus phase ("w/o Phase" in Table II).
+"""Ablation variant — PPO minus phase ("w/o Phase" in Table II).
 
 Compared to PPO full:
     Phase     ✗ (one-hot zeroed out — agent does not know which phase)
@@ -14,11 +14,11 @@ from __future__ import annotations
 import numpy as np
 
 from agents.ppo_agent import PPOAgent
-from baselines._common import BaselineFlags, CMDPLagrangian, mask_phase
+from solvers._common import BaselineFlags, CMDPLagrangian, mask_phase
 
 
-class NoPhaseCHRLPPOBaseline:
-    name = "no_phase_chrl_ppo"
+class NoPhasePPOBaseline:
+    name = "no_phase_ppo"
     FLAGS = BaselineFlags(use_phase=False, use_cmdp=True, use_hrl=True, n_constraints=5)
 
     def __init__(self, state_dim: int, action_dim: int = 6, seed: int = 0,

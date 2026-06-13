@@ -9,7 +9,7 @@ import importlib
 
 def test_package_imports():
     """All scaffolded packages must be importable."""
-    for pkg in ("env", "agents", "baselines", "experiments", "utils"):
+    for pkg in ("env", "agents", "solvers", "experiments", "utils"):
         importlib.import_module(pkg)
 
 

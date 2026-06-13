@@ -5,8 +5,8 @@
 
 ## Đã xây (3 solver = SIBLINGS, áp dụng SAU khi Pha 2 statement complete)
 - `agents/ppo_core.py`, `agents/manager_agent.py` (rApp, action 1-dim K=1 sau gỡ MEC), `agents/worker_agent.py` (xApp).
-- `baselines/td3.py` — TD3 + Lagrangian (deterministic actor) [Fujimoto 2018, `fujimoto18a.pdf`].
-- `baselines/sac.py` — SAC + Lagrangian (max-entropy stochastic actor) [Haarnoja 2018, `1812.05905v2.pdf`].
+- `solvers/td3.py` — TD3 + Lagrangian (deterministic actor) [Fujimoto 2018, `fujimoto18a.pdf`].
+- `solvers/sac.py` — SAC + Lagrangian (max-entropy stochastic actor) [Haarnoja 2018, `1812.05905v2.pdf`].
 
 ## Safety filter
 - Closed-form `Π_feasible` (projection-onto-simplex Duchi + isotonic, [TS 28.541]) — no learnable params. KHÔNG claim novel.

@@ -227,7 +227,7 @@ LR_PI_L: Final[float] = 1e-3            # Worker / xApp (fast)
 LR_V_L: Final[float] = 1e-3             # Worker critic (fast)
 
 # Worker observation layout indices (33-dim formal spec, post LSTM+MEC removal)
-# Used by train.py + ablation baselines to overlay λ_local + mask phase
+# Used by train.py + ablation solvers to overlay λ_local + mask phase
 PHASE_OH_OBS_INDEX: Final[int] = 10        # phase one-hot at obs[10:15]
 LAMBDA_LOCAL_OBS_INDEX: Final[int] = 17    # λ_local at obs[17:22]
 

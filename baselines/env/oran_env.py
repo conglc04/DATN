@@ -182,7 +182,7 @@ def hard_mission_config(
         0.70s  φ₄ TRANSPORT
         0.95s  φ₅ RETURN
 
-    Reductions vs easy config that force baselines to actually fight:
+    Reductions vs easy config that force solvers to actually fight:
         - SINR clamp 40 → 30 dB; TX power 46 → 38 dBm (micro cell typical)
         - Ambulance starts at 100m and moves at 60 km/h → SINR drifts
         - URLLC burst ×10 at φ₃ → tail probability stressed

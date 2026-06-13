@@ -1,22 +1,19 @@
-"""SAC sibling solver — off-policy SAC + 5-dim λ via LambdaState (W07).
+"""TD3 sibling solver — off-policy TD3 + 5-dim λ via LambdaState (W07).
 
 Phase 3 sibling solver — applied AFTER Phase 2 problem statement complete
-(end of W06). SAC is **flat off-policy SAC + Lagrangian** with the same
-5-dim λ machinery as PPO and TD3.
+(end of W06). TD3 is **flat off-policy TD3 + Lagrangian** with the same
+5-dim λ machinery as PPO and SAC.
 
-Differences from TD3:
-    - Stochastic max-entropy actor (automatic temperature α) instead of
-      deterministic actor + exploration noise
-    - Otherwise identical sibling-solver wiring: λ update frequency tied to
-      Worker step count via LambdaState (1 dual ascent per Manager step
-      boundary, same as on-policy)
+Differences from on-policy PPO:
+    - Off-policy backbone (TD3) with replay buffer
+    - λ update frequency tied to Worker step count via LambdaState
+      (still 1 dual ascent per Manager step boundary, same as on-policy)
 
-Used in Table I alongside TD3 to show PPO generalizes across
-on-policy and off-policy (deterministic + stochastic) constrained-RL families.
+Used in Table I alongside SAC to show PPO generalizes across
+on-policy + off-policy (deterministic + stochastic) constrained-RL families.
 
 Reference:
-    - Haarnoja et al. 2018 "Soft Actor-Critic" (ICML) +
-      "SAC Algorithms and Applications" (arXiv:1812.05905)
+    - Fujimoto et al. 2018 "TD3" (ICML)
     - docs/13_methodology_walkthrough.md Phase 2.3 (Lagrangian dual)
 """
 
@@ -25,12 +22,12 @@ from __future__ import annotations
 import numpy as np
 
 from agents.lagrangian import LambdaState
-from agents.sac_agent import SACAgent
-from baselines._common import BaselineFlags, mask_phase
+from agents.td3_agent import TD3Agent
+from solvers._common import BaselineFlags, mask_phase
 
 
-class SACBaseline:
-    name = "sac"
+class TD3Baseline:
+    name = "td3"
     FLAGS = BaselineFlags(use_phase=False, use_cmdp=True, use_hrl=False, n_constraints=5)
 
     def __init__(
@@ -44,7 +41,7 @@ class SACBaseline:
         action_high: tuple[float, ...] = (+1.0, +1.0, 1.0, 1.0, 1.0, 1.0),
     ) -> None:
         self.flags = self.FLAGS
-        self.sac = SACAgent(
+        self.td3 = TD3Agent(
             state_dim=state_dim,
             action_dim=action_dim,
             action_low=np.asarray(action_low, dtype=np.float32),
@@ -70,9 +67,8 @@ class SACBaseline:
 
     def select_action(self, obs, deterministic: bool = False):
         masked = self.maybe_mask(obs)
-        action = self.sac.select_action(masked, deterministic=deterministic)
-        # Match PPO API tuple (action, log_prob, value) — SAC log_prob/value
-        # are not surfaced through this sibling-solver interface.
+        action = self.td3.select_action(masked, deterministic=deterministic)
+        # Match PPO API tuple (action, log_prob, value) — TD3 is deterministic
         return action, 0.0, 0.0
 
     # ------------------------------------------------------------------
@@ -99,7 +95,7 @@ class SACBaseline:
     # ------------------------------------------------------------------
 
     def store_transition(self, obs, action, reward, next_obs, done) -> None:
-        self.sac.store(
+        self.td3.store(
             self.maybe_mask(obs),
             action,
             float(reward),
@@ -108,14 +104,14 @@ class SACBaseline:
         )
 
     def update(self, buffer=None) -> dict:
-        out = self.sac.update()
+        out = self.td3.update()
         lam = self.lambda_state.get_lambda_global()
         for j in range(5):
             out[f"lambda_global_{j + 1}"] = float(lam[j])
         return out
 
     def save(self, path: str) -> None:
-        self.sac.save(path)
+        self.td3.save(path)
 
     def load(self, path: str) -> None:
-        self.sac.load(path)
+        self.td3.load(path)

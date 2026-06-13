@@ -1,9 +1,9 @@
-"""Shared infrastructure for baselines.
+"""Shared infrastructure for solvers.
 
 Provides:
     - BaselineFlags: configuration toggles (phase visibility, CMDP, HRL)
     - CMDPLagrangian: dual-ascent multipliers for constrained variants
-    - PhaseMaskWrapper: zero out the phase one-hot in obs for "w/o Phase" baselines
+    - PhaseMaskWrapper: zero out the phase one-hot in obs for "w/o Phase" solvers
     - estimate_constraints: derive c1..c5 from a rollout's diagnostics
 """
 
@@ -99,7 +99,7 @@ def estimate_constraints(
 
 
 # ============================================================
-# Observation masking — for "w/o Phase" baselines
+# Observation masking — for "w/o Phase" solvers
 # ============================================================
 
 

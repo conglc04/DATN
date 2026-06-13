@@ -1,10 +1,10 @@
 [project]
-name = "pa-chrl-ppo"
+name = "baselines"
 version = "0.1.0"
 description = "Phase-Aware Constrained Hierarchical RL with PPO for O-RAN ambulance slicing (Hanoi)"
 readme = "README.md"
 requires-python = ">=3.10"
-authors = [{ name = "PA-CHRL-PPO Research" }]
+authors = [{ name = "PPO Research" }]
 
 [build-system]
 requires = ["setuptools>=65"]

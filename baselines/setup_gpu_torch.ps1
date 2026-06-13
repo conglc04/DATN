@@ -3,16 +3,16 @@
 # Mục đích: thay torch CPU bằng torch CUDA (GPU), verify hoạt động.
 #
 # Cách dùng:
-#   1. Mở PowerShell tại F:\Do an\pa_chrl_ppo
+#   1. Mở PowerShell tại F:\Do an\baselines
 #   2. Set-ExecutionPolicy -Scope Process Bypass     (nếu lần đầu)
 #   3. .\setup_gpu_torch.ps1
 
 $ErrorActionPreference = "Stop"
-$ProjectRoot = "F:\Do an\pa_chrl_ppo"
+$ProjectRoot = "F:\Do an\baselines"
 $VenvPython  = "$ProjectRoot\.venv\Scripts\python.exe"
 
 Write-Host "============================================================"
-Write-Host "  PA-CHRL-PPO  —  GPU torch setup"
+Write-Host "  PPO  —  GPU torch setup"
 Write-Host "============================================================"
 
 # --- Step 1: kiểm tra venv ---

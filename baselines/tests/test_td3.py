@@ -99,7 +99,7 @@ class TestTD3Baseline:
     """W07: TD3 uses 5-dim LambdaState (sibling solver to PPO + SAC)."""
 
     def test_instantiate(self):
-        from baselines.td3 import TD3Baseline
+        from solvers.td3 import TD3Baseline
         agent = TD3Baseline(state_dim=40, action_dim=6, seed=0)
         assert agent is not None
         assert agent.lambda_state.n_constraints == 5
@@ -108,7 +108,7 @@ class TestTD3Baseline:
         assert not hasattr(agent, "lagrangian")
 
     def test_select_action_returns_tuple(self):
-        from baselines.td3 import TD3Baseline
+        from solvers.td3 import TD3Baseline
         agent = TD3Baseline(state_dim=40, action_dim=6, seed=0)
         obs = np.zeros(40, dtype=np.float32)
         action, log_prob, value = agent.select_action(obs)
@@ -118,7 +118,7 @@ class TestTD3Baseline:
 
     def test_lambda_state_lifecycle(self):
         """on_episode_start → on_manager_step_start → accumulate → on_manager_step_end."""
-        from baselines.td3 import TD3Baseline
+        from solvers.td3 import TD3Baseline
         agent = TD3Baseline(state_dim=40, action_dim=6, seed=0, alpha_lambda=0.5)
         agent.on_episode_start(3)
         agent.on_manager_step_start(3)
@@ -134,8 +134,8 @@ class TestTD3Baseline:
         assert lam[1] > 0
 
     def test_mask_phase_in_obs(self):
-        from baselines._common import PHASE_OH_START_INDEX, PHASE_OH_LEN
-        from baselines.td3 import TD3Baseline
+        from solvers._common import PHASE_OH_START_INDEX, PHASE_OH_LEN
+        from solvers.td3 import TD3Baseline
         agent = TD3Baseline(state_dim=40, action_dim=6, seed=0)
         obs = np.arange(40, dtype=np.float32)
         masked = agent.maybe_mask(obs)
@@ -146,7 +146,7 @@ class TestTD3SmokeTrainOneEpisode:
     """1-episode smoke through smoke_train.train()."""
 
     def test_runs_without_crash(self):
-        from baselines.smoke_train import train
+        from solvers.smoke_train import train
         stats = train(
             baseline_name="td3",
             n_episodes=1,

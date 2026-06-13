@@ -15,7 +15,7 @@ from __future__ import annotations
 import numpy as np
 
 from agents.ppo_agent import PPOAgent
-from baselines._common import BaselineFlags, CMDPLagrangian
+from solvers._common import BaselineFlags, CMDPLagrangian
 
 
 class PPOCMDPFlatBaseline:

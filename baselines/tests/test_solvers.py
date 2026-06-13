@@ -1,6 +1,6 @@
-"""Week 5 tests — PPO core + 6 baselines (smoke-level).
+"""Week 5 tests — PPO core + 6 solvers (smoke-level).
 
-These tests verify the baselines don't crash and produce valid output, but do
+These tests verify the solvers don't crash and produce valid output, but do
 NOT verify convergence. Convergence checks come in Week 6 with full training.
 """
 
@@ -81,33 +81,33 @@ class TestRolloutBuffer:
 
 class TestCMDPLagrangian:
     def test_starts_at_zero(self):
-        from baselines._common import CMDPLagrangian
+        from solvers._common import CMDPLagrangian
         L = CMDPLagrangian(n=5)
         assert np.all(L.lambdas == 0.0)
 
     def test_step_increases_when_constraint_violated(self):
-        from baselines._common import CMDPLagrangian
+        from solvers._common import CMDPLagrangian
         L = CMDPLagrangian(n=2, alpha=0.1)
         L.step([0.5, 0.2])  # both positive ⇒ both λ go up
         assert L.lambdas[0] > 0
         assert L.lambdas[1] > 0
 
     def test_step_stays_nonnegative(self):
-        from baselines._common import CMDPLagrangian
+        from solvers._common import CMDPLagrangian
         L = CMDPLagrangian(n=2, alpha=1.0)
         L.lambdas[:] = [0.1, 0.0]
         L.step([-5.0, -5.0])           # very negative deviations
         assert (L.lambdas >= 0).all()
 
     def test_penalty_zero_when_constraints_negative(self):
-        from baselines._common import CMDPLagrangian
+        from solvers._common import CMDPLagrangian
         L = CMDPLagrangian(n=2)
         L.lambdas[:] = [1.0, 2.0]
         # All constraints negative → no penalty (max(0, c_j)=0)
         assert L.penalty([-1.0, -1.0]) == 0.0
 
     def test_penalty_sums_when_violated(self):
-        from baselines._common import CMDPLagrangian
+        from solvers._common import CMDPLagrangian
         L = CMDPLagrangian(n=2)
         L.lambdas[:] = [1.0, 2.0]
         assert L.penalty([0.5, 0.5]) == pytest.approx(1.0 * 0.5 + 2.0 * 0.5)
@@ -115,7 +115,7 @@ class TestCMDPLagrangian:
 
 class TestPhaseMask:
     def test_mask_zeros_out_phase_block(self):
-        from baselines._common import mask_phase, PHASE_OH_START_INDEX, PHASE_OH_LEN
+        from solvers._common import mask_phase, PHASE_OH_START_INDEX, PHASE_OH_LEN
         obs = np.arange(30).astype(np.float32)
         out = mask_phase(obs)
         assert np.all(out[PHASE_OH_START_INDEX : PHASE_OH_START_INDEX + PHASE_OH_LEN] == 0.0)
@@ -124,7 +124,7 @@ class TestPhaseMask:
         assert out[PHASE_OH_START_INDEX + PHASE_OH_LEN] != 0.0
 
     def test_mask_does_not_mutate_input(self):
-        from baselines._common import mask_phase
+        from solvers._common import mask_phase
         obs = np.ones(30, dtype=np.float32)
         _ = mask_phase(obs)
         assert np.all(obs == 1.0)
@@ -138,12 +138,12 @@ class TestPhaseMask:
 @pytest.mark.parametrize(
     "module_path,cls_name",
     [
-        ("baselines.static_slicing",    "StaticSlicingBaseline"),
-        ("baselines.b2_hrl_ppo_soft",   "B2HRLPPOSoftBaseline"),
-        ("baselines.sac",           "SACBaseline"),
-        ("baselines.pa_ppo_soft",       "PAPPOSoftBaseline"),
-        ("baselines.no_phase_chrl_ppo", "NoPhaseCHRLPPOBaseline"),
-        ("baselines.ppo_cmdp_flat",     "PPOCMDPFlatBaseline"),
+        ("solvers.static_slicing",    "StaticSlicingBaseline"),
+        ("solvers.b2_hrl_ppo_soft",   "B2HRLPPOSoftBaseline"),
+        ("solvers.sac",           "SACBaseline"),
+        ("solvers.pa_ppo_soft",       "PAPPOSoftBaseline"),
+        ("solvers.no_phase_ppo", "NoPhasePPOBaseline"),
+        ("solvers.ppo_cmdp_flat",     "PPOCMDPFlatBaseline"),
     ],
 )
 class TestBaselineSmokeAPI:
@@ -169,16 +169,16 @@ class TestBaselineSmokeAPI:
 
 class TestPhaseFlagSemantics:
     def test_b2_masks_phase(self):
-        from baselines.b2_hrl_ppo_soft import B2HRLPPOSoftBaseline
+        from solvers.b2_hrl_ppo_soft import B2HRLPPOSoftBaseline
         agent = B2HRLPPOSoftBaseline(state_dim=31, action_dim=6, seed=0)
         obs = np.arange(31, dtype=np.float32)
         masked = agent.maybe_mask(obs)
         # Phase block should be zero
-        from baselines._common import PHASE_OH_START_INDEX, PHASE_OH_LEN
+        from solvers._common import PHASE_OH_START_INDEX, PHASE_OH_LEN
         assert np.all(masked[PHASE_OH_START_INDEX : PHASE_OH_START_INDEX + PHASE_OH_LEN] == 0)
 
     def test_pa_ppo_soft_keeps_phase(self):
-        from baselines.pa_ppo_soft import PAPPOSoftBaseline
+        from solvers.pa_ppo_soft import PAPPOSoftBaseline
         agent = PAPPOSoftBaseline(state_dim=31, action_dim=6, seed=0)
         obs = np.arange(31, dtype=np.float32)
         out = agent.maybe_mask(obs)
@@ -187,25 +187,25 @@ class TestPhaseFlagSemantics:
     def test_sac_has_5dim_lambda(self):
         """SAC (B7): 5-dim λ via LambdaState (Phase 3 sibling solver to
         PPO + TD3, applied AFTER Phase 2 statement complete)."""
-        from baselines.sac import SACBaseline
+        from solvers.sac import SACBaseline
         agent = SACBaseline(state_dim=40, action_dim=6, seed=0)
         assert agent.lambda_state.n_constraints == 5
         # Old 2-dim API removed
         assert not hasattr(agent, "lagrangian")
 
-    def test_no_phase_chrl_has_5dim_lambda(self):
-        from baselines.no_phase_chrl_ppo import NoPhaseCHRLPPOBaseline
-        agent = NoPhaseCHRLPPOBaseline(state_dim=31, action_dim=6, seed=0)
+    def test_no_phase_has_5dim_lambda(self):
+        from solvers.no_phase_ppo import NoPhasePPOBaseline
+        agent = NoPhasePPOBaseline(state_dim=31, action_dim=6, seed=0)
         assert agent.lagrangian.n == 5
 
     def test_static_has_no_lambda(self):
-        from baselines.static_slicing import StaticSlicingBaseline
+        from solvers.static_slicing import StaticSlicingBaseline
         agent = StaticSlicingBaseline(state_dim=31, action_dim=6, seed=0)
         assert not hasattr(agent, "lagrangian")
 
 
 # ============================================================
-# Smoke train — 3 main baselines for Gate P3 (1 episode only — keep fast)
+# Smoke train — 3 main solvers for Gate P3 (1 episode only — keep fast)
 # ============================================================
 
 
@@ -213,7 +213,7 @@ class TestSmokeTrainOneEpisode:
     """Gate P3 prep: each main baseline runs 1 episode without crash."""
 
     def _run_one(self, baseline_name):
-        from baselines.smoke_train import train
+        from solvers.smoke_train import train
         stats = train(
             baseline_name=baseline_name,
             n_episodes=1,

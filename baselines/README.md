@@ -1,8 +1,8 @@
-# PA-CHRL-PPO
+# O-RAN Ambulance Slicing — PPO / TD3 / SAC
 
-**Phase-Aware Constrained Hierarchical RL with PPO for O-RAN Ambulance Slicing (Hanoi)**
+**Severity-Aware Intra-slice Scheduling cho 5G O-RAN (Hà Nội, single-cell UMi @ Bạch Mai)**
 
-Implementation reference cho luận văn nghiên cứu O-RAN URLLC slicing với 5-phase ambulance FSM, CMDP-Lagrangian constraints, NSF safety filter, và multi-task LSTM QoS predictor.
+Implementation reference cho luận văn: O-RAN URLLC slicing với 5-phase ambulance FSM + severity-aware intra-slice + CMDP-Lagrangian constraints + closed-form Π_feasible safety. Bài toán tối ưu được giải bằng **3 solver ngang hàng (PPO, TD3, SAC)** — KHÔNG đề cao thuật toán nào.
 
 Toàn bộ specs nằm trong `../docs/` (11 file). File này chỉ là quick-start.
 
@@ -27,18 +27,15 @@ pytest tests/ -v
 ## Cấu trúc
 
 ```
-pa_chrl_ppo/
-├── env/            # Simulator O-RAN (channel, queue, traffic, phase, AoI, MEC)
-├── agents/         # PA-CHRL-PPO + safety (NSF) + LSTM
-├── baselines/      # Static 50/50 + B2 HRL-PPO + B3 RCPO + 3 ablation variants
-├── experiments/    # Exp1-Exp11 + statistical analysis
+baselines/          # repo code root (đổi tên từ pa_chrl_ppo/)
+├── env/            # Simulator O-RAN (channel, queue, traffic, phase, AoI) — MEC/vital gỡ
+├── agents/         # ppo_core, manager/worker (PPO HRL), td3_agent, sac_agent, lagrangian
+├── solvers/        # 3 solver ngang hàng (PPO via train_ppo, td3.py, sac.py) + ablation variants
+├── experiments/    # sweep W18-W23 → Table I/II + stats_analysis (Holm-Bonferroni)
 ├── utils/          # config / logger / metrics
-├── data/           # synthetic traces (Track A) + Hanoi calibration (Track B)
+├── data/           # synthetic traces + Hanoi calibration (placeholder)
 ├── tests/          # unit tests
-├── figures/        # output figures
-├── checkpoints/    # model weights
-├── logs/           # training logs
-└── train.py        # main training entry point
+└── train.py        # main training entry point (--algo ppo|td3|sac)
 ```
 
 ## Lịch trình 16 tuần
@@ -48,9 +45,9 @@ Xem `../docs/09_execution_plan.md` cho deliverables từng tuần.
 | Phase | Tuần | Module chính |
 |---|---|---|
 | P1 Foundation | 1-2 | Setup + env modules cơ bản |
-| P2 Simulator | 3-4 | Phase/AoI/MEC + ORANEnv |
-| P3 Baselines | 5-6 | 3 baselines + 3 ablation variants |
-| P4 PA-CHRL-PPO | 8-10 | Worker/Manager/CMDP + NSF + LSTM |
+| P2 Simulator | 3-4 | Phase/AoI + ORANEnv (MEC gỡ) |
+| P3 Solvers | 5-6 | 3 solver (PPO/TD3/SAC) + ablation variants |
+| P4 Solvers | 8-10 | Worker/Manager + CMDP-Lagrangian (Π_feasible safety) |
 | P5 Experiments | 11-13 | Exp1-Exp8 core |
 | P6 Advanced | 14 | Exp10/11 + statistical analysis |
 | P7 Writing | 15-16 | IEEE TWC manuscript |
