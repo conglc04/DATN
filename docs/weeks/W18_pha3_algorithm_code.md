@@ -1,6 +1,6 @@
-# W18 — Pha 3: Thuật toán (PA-CHRL-PPO) + Code K≥2 + PPO solver run, K=1
+# W18 — Pha 3: Thuật toán (PPO) + Code K≥2 + PPO solver run, K=1
 
-> **Pha**: 3 · **Status**: 📅 PLANNED · **Gate**: **GATE 3A** · **Solver**: PA-CHRL-PPO · **K**: 1 (1 xe cứu thương) · **Nhóm**: A1–A4 · **Build**: B0/B0b + B5 · **Deps**: GATE 2
+> **Pha**: 3 · **Status**: 📅 PLANNED · **Gate**: **GATE 3A** · **Solver**: PPO · **K**: 1 (1 xe cứu thương) · **Nhóm**: A1–A4 · **Build**: B0/B0b + B5 · **Deps**: GATE 2
 
 ## Env config khóa (áp dụng XUYÊN SUỐT W18–W23, KHÔNG đổi giữa các tuần)
 - **gNB / cell-center**: cố định tại local origin `(0,0)` m — điểm hội tụ 3 xe trên đường Giải Phóng, anchor bởi GPS BV Bạch Mai (`config.py: BACH_MAI_LAT/LON`, dùng cho lớp OSM/SUMO W15, KHÔNG dùng trực tiếp trong RL env).
@@ -23,7 +23,7 @@
 - **B0 LSTM removal** + **B0b MEC removal**: gỡ `lstm_*`, `vital_simulator.py`, `mec_model.py`, `u_MEC` obs, `F_MEC`; verify `observation_space.shape==(33,)` (K=1).
 
 ## C — PPO solver run, K=1
-- **C1** Train PA-CHRL-PPO (Manager+Worker) trên env K=1, R_cell=300m, UMi single-cell, no handover, ≥10 seeds.
+- **C1** Train PPO (Manager+Worker) trên env K=1, R_cell=300m, UMi single-cell, no handover, ≥10 seeds.
 - **C2** Log: episode reward, 5 constraint costs C1–C5, λ-trajectory (λ_C1..C5), λ-saturation-rate (= %step `λ_c==Λ_max=10`).
 - **C3** Sanity: `test_oran_env_sanity`, `test_reward_constraint_tracking` pass với obs=33.
 

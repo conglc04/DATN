@@ -1,12 +1,12 @@
 # W19 — Pha 3: PPO solver run, K=3 (severity + intra-slice)
 
-> **Pha**: 3 · **Status**: 📅 PLANNED · **Gate**: **GATE 3B** · **Solver**: PA-CHRL-PPO · **K**: 3 (3 xe cứu thương) · **Build**: B5 (đã code ở W18) · **Deps**: GATE 3A
+> **Pha**: 3 · **Status**: 📅 PLANNED · **Gate**: **GATE 3B** · **Solver**: PPO · **K**: 3 (3 xe cứu thương) · **Build**: B5 (đã code ở W18) · **Deps**: GATE 3A
 
 ## Env config (giống W18, KHÔNG đổi)
 gNB/cell-center = `(0,0)`, R_cell=300m, UMi 3GPP TR 38.901, single-cell, no handover. Chỉ đổi `K_ambulances: 1 → 3` → obs 33→58 (đã code+assert ở W18/B5).
 
 ## C — PPO solver run, K=3
-- **C1** Train PA-CHRL-PPO (Manager+Worker) trên env K=3, ≥10 seeds, MCI single-cell @ Bạch Mai (3 xe đồng trú 1 cell, hội tụ, severity khác nhau → triage contention).
+- **C1** Train PPO (Manager+Worker) trên env K=3, ≥10 seeds, MCI single-cell @ Bạch Mai (3 xe đồng trú 1 cell, hội tụ, severity khác nhau → triage contention).
 - **C2** Log: episode reward, 5+1 constraint costs C1–C5 (+ C6 per-pair, K=3 có C(3,2)=3 cặp), λ-trajectory + saturation-rate (= %step `λ_c==Λ_max=10`) cho mọi λ kể cả `λ_C6^{ij}`.
 - **C3** Verify cấu trúc K=3 (chuẩn bị cho so sánh PPO vs TD3 vs SAC ở các tuần sau, KHÔNG so sánh chéo solver trong tuần này):
   - **ordering-compliance**: `sev_i>sev_j ∧ S>0 ⟹ PRB_i>PRB_j` (khi surplus S>0).

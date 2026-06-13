@@ -31,7 +31,7 @@
 | §1.4 | λ_C6 init/α/clip; s_C6 | ✅/🔴 | reuse ALPHA_LAMBDA_DUAL=1e-4, LAMBDA_MAX=10; s_C6 🔴 |
 | A1.1/1.2 | PPO; GAE | ✅ | `1707.06347v2`; `Foundations_of_Deep_RL` *(Schulman 2016 vắng corpus)* |
 | A2.1 | two-timescale HRL | ✅ | `Akyıldız 2024` *(Borkar/FeUdal vắng corpus)* |
-| A3.2/3.3 | TD3-Lag; SAC-Lag (sibling solvers) | ✅ | `fujimoto18a`; `1812.05905v2` (Haarnoja 2018 SAC) *(B3-RCPO loại khỏi Table I)* |
+| A3.2/3.3 | TD3; SAC (sibling solvers) | ✅ | `fujimoto18a`; `1812.05905v2` (Haarnoja 2018 SAC) *(B3-RCPO loại khỏi Table I)* |
 | A-E2.3 | fairness (KHÔNG Jain toàn cục) | 🟡 | within-tier/weighted-Jain; Jain 1984 vắng corpus |
 | P5.1 | softmax priority weight | ✅ | TS 23.501 §5.7 5QI *(WFQ Parekh&Gallager vắng corpus)* |
 

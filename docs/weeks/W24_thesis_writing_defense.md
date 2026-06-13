@@ -9,13 +9,13 @@
 - **A-E6.3** Polish formulation cho luận án: hoàn thiện đoạn văn đặc tả CMDP (P1-P5) + 2 structural guarantee (P5.2) + C6 soft-nudge framing (§1.4) + SAC entropy-temperature framing (mới, B7) — đảm bảo phát biểu bài toán tự-đầy-đủ.
 
 ## A6 — Viết + bảo vệ
-- **A6.1** Viết theo **3 pha** (Mô hình hệ thống → Bài toán tối ưu → 3 solver giải: PA-CHRL-PPO, TD3-Lag, SAC-Lag) + Related Work (master plan PHẦN 10) + `REFERENCE_MAP` đầy đủ (mọi M*/P*/A* → file `documents/` hoặc chuẩn).
+- **A6.1** Viết theo **3 pha** (Mô hình hệ thống → Bài toán tối ưu → 3 solver giải: PPO, TD3, SAC) + Related Work (master plan PHẦN 10) + `REFERENCE_MAP` đầy đủ (mọi M*/P*/A* → file `documents/` hoặc chuẩn).
 - **A6.2** Trình bày sweep K∈{1,3} × 3 solver (Table I + Table II từ W23) như nội dung thực nghiệm chính.
 - **A6.3** Defense slides (master plan PHẦN 12); đánh dấu rõ future work (E3 AoI re-run SUMO, E4 stress/robustness, feasibility-projection polish / ns-3 / cardiac-event severity). [LSTM/MEC đã loại — KHÔNG nhắc.]
 
 ## Khung đóng góp (master plan PHẦN 8)
 - **C1 — Context-aware constraints (phase + severity)**: **★ HEADLINE — Severity NOVEL** (triage → intra-slice priority + ordering).
-- **C2 — CMDP-Lagrangian → 3 solver (PA-CHRL-PPO HRL, TD3-Lag, SAC-Lag)** (✅ built, sweep W18-W23).
+- **C2 — CMDP-Lagrangian → 3 solver (PPO HRL, TD3, SAC)** (✅ built, sweep W18-W23).
 - **C3 — AoI hard constraints** (✅ built).
 - *Feasibility projection* (honest, KHÔNG claim novel như Kim 2026).
 

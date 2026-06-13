@@ -9,8 +9,8 @@ B0/B0b (gỡ LSTM+MEC+vital+β_qp)
 B2 (naca_severity.py) ─┐
 B3 (sumo_mobility.py) ─┴─► B5 (oran_env K≥2 + intra-slice + Π_feasible projection + assert obs 33/58)
                             ├─► W18 PPO K=1 ─► W19 PPO K=3
-                            ├─► B6 (TD3-Lag, đã có) ─► W20 TD3-Lag K=1 ─► W21 TD3-Lag K=3
-                            └─► B7 (SAC-Lag, NEW) ─► W22 SAC-Lag K=1 ─► W23 SAC-Lag K=3 (Table I/II)
+                            ├─► B6 (TD3, đã có) ─► W20 TD3 K=1 ─► W21 TD3 K=3
+                            └─► B7 (SAC, NEW) ─► W22 SAC K=1 ─► W23 SAC K=3 (Table I/II)
                                                                               └─► B8 (W24: formulation completeness audit + luận án)
 ```
 
@@ -28,10 +28,10 @@ gNB/cell-center=`(0,0)` (local Cartesian, điểm hội tụ 3 xe trên Giải P
 | **2** | W17 | obj+C1–C6+Lagrangian+intra-slice ✅/🔴; ký hiệu khớp obs/action → **Pha 2 xong** |
 | **3A** | W18 | test_intra_slice + test_multi_amb pass; assert obs 33/58; PPO K=1 hội tụ; ~261 tests xanh |
 | **3B** | W19 | PPO K=3 hội tụ trên obs=58; ≥1 kịch bản structural guarantee (ordering + no-starvation) |
-| **3C** | W20 | TD3-Lag K=1 hội tụ; C1–C5 trong ngưỡng hoặc λ phản ứng đúng hướng |
-| **3D** | W21 | TD3-Lag K=3 hội tụ trên obs=58; ≥1 kịch bản structural guarantee cho TD3-Lag |
-| **3E** | W22 | SAC-Lag code mirror TD3-Lag (BaselineFlags/LambdaState); SAC-Lag K=1 hội tụ (α hội tụ hợp lý) |
-| **3F** | W23 | SAC-Lag K=3 hội tụ trên obs=58; Table I (6 cell, 3 solver × K∈{1,3}) + Table II (severity/intra-slice K=3) có CI + p-value hiệu chỉnh |
+| **3C** | W20 | TD3 K=1 hội tụ; C1–C5 trong ngưỡng hoặc λ phản ứng đúng hướng |
+| **3D** | W21 | TD3 K=3 hội tụ trên obs=58; ≥1 kịch bản structural guarantee cho TD3 |
+| **3E** | W22 | SAC code mirror TD3 (BaselineFlags/LambdaState); SAC K=1 hội tụ (α hội tụ hợp lý) |
+| **3F** | W23 | SAC K=3 hội tụ trên obs=58; Table I (6 cell, 3 solver × K∈{1,3}) + Table II (severity/intra-slice K=3) có CI + p-value hiệu chỉnh |
 | **3-FINAL** | W24 | formulation Pha 1-3 hoàn chỉnh (0 🟡 sót); Table I/II CI đủ (không overlap hoặc giải thích trung thực); E3/E4 declared future work — KHÔNG yêu cầu E3/E4 chạy |
 
 ## Critical path

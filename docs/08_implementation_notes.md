@@ -15,7 +15,7 @@ pa_chrl_ppo/
 │   ├── sumo_mobility.py      # [MỚI, B3 — chưa tạo] SUMO FCD trace reader (GPS→metric)
 │   └── oran_env.py           # Gym ORANEnv (K≥2: +severity, +β, intra-slice Option B)
 ├── agents/                   # ppo_core, manager_agent, worker_agent, lagrangian, td3_agent, sac_agent[MỚI B7], nsf(→Π_feasible)
-├── baselines/                # 3 solver: PA-CHRL-PPO + td3_lag.py + sac_lag.py[MỚI B7]. (B3-RCPO đã gỡ HOÀN TOÀN)
+├── baselines/                # 3 solver: PPO + td3.py + sac.py[MỚI B7]. (B3-RCPO đã gỡ HOÀN TOÀN)
 ├── experiments/              # sweep W18-W23 → Table I/II (E3/E4 = future work, D26); stats_analysis (Holm-Bonferroni)
 ├── data/sumo/                # [MỚI] hanoi_bachmai.osm, *.net.xml, ambulance_routes.xml, *.fcd.xml
 └── utils/config.py           # single source: P_TOTAL=273, PHASE_QOS, LAMBDA_WARM, ALPHA_LAMBDA_DUAL=1e-4, LAMBDA_MAX=10, WORKER_STEPS_PER_MANAGER=10

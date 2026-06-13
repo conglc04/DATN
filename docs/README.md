@@ -1,8 +1,8 @@
-# PA-CHRL-PPO — Documentation
+# PPO — Documentation
 
 Severity-Aware Intra-slice Scheduling cho 5G O-RAN ambulance (Hà Nội, single-cell UMi @ Bạch Mai).
 
-> **Nguồn-sự-thật**: master plan `~/.claude/plans/s-p-x-p-l-i-plan-jaunty-toast.md`. Bộ docs này = phản chiếu repo-resident, audited, reference-disciplined (✅/🟡/🔴). Pipeline 3 pha: Mô hình hệ thống → Bài toán tối ưu → PA-CHRL-PPO giải.
+> **Nguồn-sự-thật**: master plan `~/.claude/plans/s-p-x-p-l-i-plan-jaunty-toast.md`. Bộ docs này = phản chiếu repo-resident, audited, reference-disciplined (✅/🟡/🔴). Pipeline 3 pha: Mô hình hệ thống → Bài toán tối ưu → 3 solver ngang hàng (PPO/TD3/SAC) giải.
 
 ## Doc map
 | Doc | Nội dung |
@@ -12,7 +12,7 @@ Severity-Aware Intra-slice Scheduling cho 5G O-RAN ambulance (Hà Nội, single-
 | [03_architecture](03_architecture.md) | O-RAN topology, channel UMi single-cell, phase FSM |
 | [04_data_flow](04_data_flow.md) | D_e2e decomposition (no MEC), AoI model |
 | [05_agent_workflow](05_agent_workflow.md) | HRL 2-tier, RRMPolicyRatio, Lagrangian, projection |
-| [06_validation](06_validation.md) | 3 solver (PA-CHRL-PPO, TD3-Lag, SAC-Lag), sweep K∈{1,3} → Table I/II (E3/E4 future work), stats discipline |
+| [06_validation](06_validation.md) | 3 solver (PPO, TD3, SAC), sweep K∈{1,3} → Table I/II (E3/E4 future work), stats discipline |
 | [07_api_spec](07_api_spec.md) | obs (33/58) + action (6/7 +β) spec |
 | [08_implementation_notes](08_implementation_notes.md) | Code map, removals (LSTM/MEC/vital/β_qp) |
 | [09_execution_plan](09_execution_plan.md) | Tổng quan lịch tuần W01–W24 |

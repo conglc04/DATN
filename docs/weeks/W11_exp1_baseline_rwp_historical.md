@@ -7,7 +7,7 @@
 
 ## ⚠️ TRẠNG THÁI (master plan D8/D9/D20, PHẦN 9)
 - **RWP BỎ HOÀN TOÀN** — mọi số RWP = **LỊCH SỬ, KHÔNG dùng làm kết quả/tham chiếu/sanity**. obs đã đổi 40→33-dim (gỡ LSTM+MEC) ⟹ không dim-compatible.
-- ❌ **Exp1B (LSTM accuracy) — GỠ HOÀN TOÀN** (LSTM loại, master plan D10). ❌ **B3-RCPO — loại HOÀN TOÀN** (sweep dùng PA-CHRL-PPO / TD3-Lag / SAC-Lag).
+- ❌ **Exp1B (LSTM accuracy) — GỠ HOÀN TOÀN** (LSTM loại, master plan D10). ❌ **B3-RCPO — loại HOÀN TOÀN** (sweep dùng PPO / TD3 / SAC).
 - → Solver chạy LẠI TỪ ĐẦU trên **SUMO** = sweep W18–W23 (KHÔNG cite số RWP cũ).
 
 ## Liên kết

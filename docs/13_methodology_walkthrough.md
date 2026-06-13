@@ -2,7 +2,7 @@
 
 > Spec toán hợp nhất, mirror master plan `~/.claude/plans/s-p-x-p-l-i-plan-jaunty-toast.md` PHẦN 1 (thiết kế toán) + PHẦN 2 (I/O). Chi tiết atomic theo tuần ở [`weeks/`](weeks/README.md). Mọi đại lượng có nhãn ✅/🟡/🔴; nguồn vắng corpus flag rõ.
 >
-> **Pipeline**: Pha 1 Mô hình hệ thống → Pha 2 Bài toán tối ưu (CMDP) → Pha 3 PA-CHRL-PPO giải. RL/DL là **bước CUỐI** (solver), sau khi phát biểu bài toán hoàn tất.
+> **Pipeline**: Pha 1 Mô hình hệ thống → Pha 2 Bài toán tối ưu (CMDP) → Pha 3: 3 solver NGANG HÀNG (PPO/TD3/SAC) giải. RL/DL là **bước CUỐI** (solver), sau khi phát biểu bài toán hoàn tất; KHÔNG đề cao thuật toán nào.
 
 ---
 
@@ -53,11 +53,11 @@ MAC TTI=0.5ms [TS 38.211 μ=1] · Worker(xApp)=10ms · Manager(rApp)=1s; `W=WORK
 
 ---
 
-## Pha 3 — Thuật toán PA-CHRL-PPO — [W18](weeks/W18_pha3_algorithm_code.md)
+## Pha 3 — Giải bằng 3 solver ngang hàng (PPO/TD3/SAC) — [W18](weeks/W18_pha3_algorithm_code.md)
 
-### 3.1 Thành phần
-- PPO clipped — ✅[`1707.06347v2.pdf`]; GAE — ✅[`Foundations_of_Deep_RL.pdf`]; two-timescale HRL — ✅[`Akyıldız 2024`].
-- Sibling solvers (off-policy + Lagrangian): **TD3-Lag** ✅[`fujimoto18a.pdf`] (deterministic actor) + **SAC-Lag** ✅[`1812.05905v2.pdf` Haarnoja 2018] (max-entropy stochastic actor). *(B3-RCPO cũ loại khỏi Table I.)*
+### 3.1 Khung chung + 3 solver ngang hàng
+- **Khung CHUNG** (KHÔNG gắn 1 thuật toán): two-timescale HRL Manager/Worker ✅[`Akyıldız 2024`] + CMDP-Lagrangian (§2.3) + Π_feasible (§3.2) + GAE ✅[`Foundations_of_Deep_RL.pdf`].
+- **3 RL core NGANG HÀNG** giải cùng bài toán (so sánh công bằng): **PPO** clipped ✅[`1707.06347v2.pdf`] (on-policy); **TD3** ✅[`fujimoto18a.pdf`] (off-policy deterministic); **SAC** ✅[`1812.05905v2.pdf` Haarnoja 2018] (off-policy max-entropy). *(B3-RCPO cũ loại khỏi Table I.)*
 
 ### 3.2 Kiến trúc & safety
 - Manager (rApp) + Worker (xApp) actor-critic; action continuous → RRMPolicyRatio.
