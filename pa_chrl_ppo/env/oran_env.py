@@ -6,7 +6,6 @@ Integrates all Week 2-3 modules into a TTI-level simulator:
     - Traffic: URLLC + eMBB generators
     - Phase: 5-state FSM (held fixed or trajectory-driven via reset opts)
     - AoI: stream-aware trackers
-    - MEC: server budget + offload rules
 
 Time hierarchy (sim — compressed per docs/08:305-336):
     1 episode = 1s of simulated time
@@ -19,8 +18,6 @@ Action space (6-dim continuous, per docs/05:103-114):
     a[2] = r_ded_ratio    ∈ [ 0,  1] → r_ded = min(0.2, r_ded_ratio × r_min)
     a[3..5] = w_C1, w_C2, w_C3 (Softmax later — env stores raw logits)
 
-Note: δ (preemption) and x_k (MEC offload) are rule-based, NOT in this action.
-
 Observation (Worker s_L, flattened — dim depends on K, F):
     Q_urllc, Q_eMBB                      (queue lengths, packets)
     HOL_urllc, HOL_eMBB                  (sec)
@@ -30,9 +27,8 @@ Observation (Worker s_L, flattened — dim depends on K, F):
     mean_BLER_cell
     phase one-hot (5-dim)
     AoI_per_stream                        (sec)
-    λ_local (5-dim, zeros until Week 9)
+    λ_local (5-dim)
     rrm_budget (1-dim placeholder)
-    LSTM 6-head outputs (zeros until Week 10)
 
 Reference:
     - docs/08_implementation_notes.md TTI Simulation Loop
@@ -57,7 +53,6 @@ from env.channel_model import (
 )
 from env.queue_model import MG1Queue, SliceQueueManager
 from env.aoi_tracker import AoIStreamTracker, STREAM_TYPES, aoi_threshold_for_phase
-from env.mec_model import MECServer
 from env.phase_detector import Phase, PhaseDetector
 from utils.config import (
     B_PRB,
@@ -253,15 +248,15 @@ class ORANEnv(gym.Env):
 
         K = self.config.K_ambulances
         F = self.config.num_streams
-        # Phase 1.1 formal Worker state s_t^L = 33 + 3K + F dims (docs/13 Phase 1.1)
-        #   33-dim fixed block (queue, HOL, PRB_util, arr_rates, BLER, n_active,
-        #                       phase one-hot, λ_local, rrm_budget, MEC util, n_bys,
-        #                       AoI summary, LSTM 6-head, ETA_next, t_phi)
+        # Phase 1.1 formal Worker state s_t^L = 26 + 3K + F dims (docs/13 Phase 1.2)
+        #   26-dim fixed block (queue, HOL, PRB_util, arr_rates, BLER,
+        #                       phase one-hot, λ_local, rrm_budget, n_bys,
+        #                       AoI summary, ETA_next, t_phi)
         #   3K per-ambulance block (SINR, distance, speed)
         #   F per-stream block (AoI per stream)
-        # For K=1, F=4 → 33 + 3 + 4 = 40 dim.
+        # For K=1, F=4 → 26 + 3 + 4 = 33 dim. (LSTM + MEC removed — B0/B0b)
         obs_dim = (
-            # === Fixed 33-dim block ===
+            # === Fixed 26-dim block ===
             2     # Q_urllc, Q_eMBB
             + 2   # HOL_urllc, HOL_eMBB
             + 3   # PRB ratios: r_min^URLLC, r_max^eMBB, r_ded^URLLC (Phase 1.1)
@@ -272,11 +267,9 @@ class ORANEnv(gym.Env):
             + 1   # ETA_next (s, normalized)
             + 5   # λ_local (5 hard constraints)
             + 1   # rrm_budget hint (Manager → Worker)
-            + 1   # u_MEC (MEC utilization)
             + 1   # n_bys (active bystander UE count, normalized)
             + 2   # mean AoI + max AoI (across F streams)
-            + 6   # LSTM 6-head placeholder
-            # = 33 fixed
+            # = 26 fixed
             # === 3K per-ambulance block ===
             + 3 * K  # SINR_k (dB clamped, normalized), d_k (distance to BS), v_k (speed)
             # === F per-stream block ===
@@ -293,7 +286,6 @@ class ORANEnv(gym.Env):
             tx_power_dbm=self.config.bs_tx_power_dbm,
         )
         self.channel = ChannelModel(shadowing=True, rng=np.random.default_rng(seed))
-        self.mec = MECServer()
         # Bystander spike model — built lazily in reset() if enabled
         self.bystander = None
 
@@ -726,10 +718,10 @@ class ORANEnv(gym.Env):
     # ----------------------------------------------------------------
 
     def _observe(self) -> np.ndarray:
-        """Return Phase 1.1 formal Worker state s_t^L (40-dim for K=1, F=4).
+        """Return Phase 1.2 formal Worker state s_t^L (33-dim for K=1, F=4).
 
-        Layout (matches docs/13 Phase 1.1):
-            == Fixed 33-dim block ==
+        Layout (matches docs/13 Phase 1.2 — LSTM + MEC removed, B0/B0b):
+            == Fixed 26-dim block ==
             [0:2]   Q_urllc, Q_eMBB                      (queue arrival rates, normalized)
             [2:4]   HOL_urllc, HOL_eMBB                   (head-of-line delay, ms)
             [4:7]   r_min^URLLC, r_max^eMBB, r_ded^URLLC  (PRB ratios)
@@ -740,16 +732,14 @@ class ORANEnv(gym.Env):
             [16]    ETA_next (s, normalized; 0 if unknown)
             [17:22] λ_local (5 hard constraints)
             [22]    rrm_budget hint (Manager → Worker)
-            [23]    u_MEC (MEC utilization)
-            [24]    n_bys (active bystander UE count, normalized by M_eMBB)
-            [25:27] mean AoI + max AoI (s, across F streams)
-            [27:33] LSTM 6-head placeholder (zeros until Week 10)
+            [23]    n_bys (active bystander UE count, normalized by M_eMBB)
+            [24:26] mean AoI + max AoI (s, across F streams)
             == 3K per-ambulance block ==
-            [33:33+K]      SINR_k (dB normalized)
-            [33+K:33+2K]   d_k (distance to serving O-RU, normalized by cell_radius)
-            [33+2K:33+3K]  v_k (speed m/s, normalized by 60 m/s)
+            [26:26+K]      SINR_k (dB normalized)
+            [26+K:26+2K]   d_k (distance to serving O-RU, normalized by cell_radius)
+            [26+2K:26+3K]  v_k (speed m/s, normalized by 60 m/s)
             == F per-stream block ==
-            [33+3K:33+3K+F]  AoI per stream (s)
+            [26+3K:26+3K+F]  AoI per stream (s)
 
         Normalisations chosen to keep components O(1) for PPO stability.
         """
@@ -787,9 +777,6 @@ class ORANEnv(gym.Env):
         eta_next = self._compute_eta_next()
         eta_next_norm = float(np.clip(eta_next, 0.0, 10.0)) / 10.0  # clip 10s, normalize
 
-        # MEC utilization (property, not method)
-        mec_util = float(self.mec.utilization) if hasattr(self.mec, "utilization") else 0.0
-
         # Bystander UE count (normalized by baseline M_eMBB)
         if self.bystander is not None:
             n_bys = float(self.bystander.active_ue_count(self.sim_time)) / max(self.config.M_eMBB, 1)
@@ -816,15 +803,14 @@ class ORANEnv(gym.Env):
                 phase_oh,                                            # [10:15] phase one-hot
                 np.array([t_phi, eta_next_norm], dtype=np.float32),  # [15:17]
                 np.asarray(self.config.lambda_local, dtype=np.float32),  # [17:22] λ_local
-                np.array([self.config.rrm_budget_hint, mec_util, n_bys,  # [22:25]
-                          aoi_mean, aoi_max], dtype=np.float32),     # [25:27]
-                np.zeros(6, dtype=np.float32),                       # [27:33] LSTM placeholder
+                np.array([self.config.rrm_budget_hint, n_bys,        # [22:24]
+                          aoi_mean, aoi_max], dtype=np.float32),     # [24:26]
                 # === 3K per-amb block ===
-                sinr_norm,                                           # [33:33+K]   SINR
-                amb_dist.astype(np.float32),                         # [33+K:33+2K] distance
-                amb_speed.astype(np.float32),                        # [33+2K:33+3K] speed
+                sinr_norm,                                           # [26:26+K]   SINR
+                amb_dist.astype(np.float32),                         # [26+K:26+2K] distance
+                amb_speed.astype(np.float32),                        # [26+2K:26+3K] speed
                 # === F per-stream block ===
-                aoi_vec,                                             # [33+3K:33+3K+F]
+                aoi_vec,                                             # [26+3K:26+3K+F]
             ]
         )
         # Final safety: replace any residual NaN/inf with 0

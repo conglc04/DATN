@@ -98,7 +98,7 @@ def test_beta_qp_respects_floor():
 
 
 def test_build_manager_state_shape():
-    obs = np.zeros(40, dtype=np.float32)
+    obs = np.zeros(33, dtype=np.float32)
     lam = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float64)
     s_H = build_manager_state(obs, lam)
     assert s_H.shape == (11,)
@@ -106,7 +106,7 @@ def test_build_manager_state_shape():
 
 
 def test_build_manager_state_includes_lambda():
-    obs = np.zeros(40, dtype=np.float32)
+    obs = np.zeros(33, dtype=np.float32)
     lam = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float64)
     s_H = build_manager_state(obs, lam)
     # λ_global occupies tail 5 slots
@@ -115,7 +115,7 @@ def test_build_manager_state_includes_lambda():
 
 def test_build_manager_state_phase_normalized():
     """Phase index encoded as (argmax+1)/5 from one-hot block."""
-    obs = np.zeros(40, dtype=np.float32)
+    obs = np.zeros(33, dtype=np.float32)
     obs[10 + 2] = 1.0  # phase φ_3 (one-hot at index 12)
     lam = np.zeros(5)
     s_H = build_manager_state(obs, lam)
@@ -128,7 +128,7 @@ def test_build_manager_state_phase_normalized():
 
 
 def test_overlay_lambda_local_replaces_block():
-    obs = np.arange(40, dtype=np.float32)
+    obs = np.arange(33, dtype=np.float32)
     lam = np.array([0.1, 0.2, 0.3, 0.4, 0.5], dtype=np.float64)
     out = overlay_lambda_local(obs, lam)
     np.testing.assert_array_almost_equal(
@@ -144,7 +144,7 @@ def test_overlay_lambda_local_replaces_block():
 
 
 def test_overlay_lambda_local_does_not_mutate_input():
-    obs = np.arange(40, dtype=np.float32)
+    obs = np.arange(33, dtype=np.float32)
     obs_orig = obs.copy()
     lam = np.ones(5)
     _ = overlay_lambda_local(obs, lam)

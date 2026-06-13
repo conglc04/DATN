@@ -107,12 +107,13 @@ def test_get_phase_alpha_phi3_urllc_priority():
 # ----------------------------------------------------------------------------
 
 
-def test_observation_dim_40_with_K1_F4():
-    """Phase 1.1 formal spec: |s_t^L| = 33 + 3K + F = 33 + 3 + 4 = 40 for K=1, F=4."""
+def test_observation_dim_33_with_K1_F4():
+    """Phase 1.2 formal spec: |s_t^L| = 26 + 3K + F = 26 + 3 + 4 = 33 for K=1, F=4
+    (LSTM 6-head + u_MEC removed — B0/B0b)."""
     env = ORANEnv(config=EnvConfig(K_ambulances=1, num_streams=4), seed=0)
     obs, _ = env.reset(seed=0)
-    assert obs.shape == (40,), f"Expected (40,), got {obs.shape}"
-    assert env.observation_space.shape == (40,)
+    assert obs.shape == (33,), f"Expected (33,), got {obs.shape}"
+    assert env.observation_space.shape == (33,)
 
 
 def test_observation_finite_no_nan():

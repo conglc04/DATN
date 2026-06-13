@@ -117,7 +117,7 @@ def build_manager_state(
         [0:2]   ρ_urllc, ρ_eMBB              (from worker [0:2])
         [2]     mean BLER                    (from worker [9])
         [3]     phase index (normalized)     (argmax worker [10:15] / 5)
-        [4:6]   aoi mean, aoi max            (from worker [25:27])
+        [4:6]   aoi mean, aoi max            (from worker [24:26])
         [6:11]  λ_global per-constraint (5)  (from LambdaState)
     """
     rho_urllc = float(worker_obs[0])
@@ -125,8 +125,8 @@ def build_manager_state(
     bler = float(worker_obs[9])
     phase_oh = worker_obs[PHASE_OH_OBS_INDEX : PHASE_OH_OBS_INDEX + 5]
     phase_idx = float((np.argmax(phase_oh) + 1) / 5.0)
-    aoi_mean = float(worker_obs[25])
-    aoi_max = float(worker_obs[26])
+    aoi_mean = float(worker_obs[24])
+    aoi_max = float(worker_obs[25])
     s_H = np.concatenate(
         [
             np.array([rho_urllc, rho_emBB, bler, phase_idx, aoi_mean, aoi_max], dtype=np.float32),

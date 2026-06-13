@@ -1,6 +1,6 @@
 """Worker agent (xApp π_L) for PA-CHRL-PPO.
 
-Phase 3.3.3 / 3.3.4: low-level policy operating on full Worker state (40-dim
+Phase 3.3.3 / 3.3.4: low-level policy operating on full Worker state (33-dim
 for K=1, F=4) every Worker step (T_L = 10 ms sim = 20 MAC ticks).
 
 Output action dimensions (Phase 2.3.2):
@@ -36,7 +36,7 @@ from utils.config import (
     PPO_K_EPOCHS,
 )
 
-WORKER_STATE_DIM_DEFAULT: int = 40
+WORKER_STATE_DIM_DEFAULT: int = 33
 WORKER_ACTION_DIM_DEFAULT: int = 6
 # Component indices in the 6-dim raw action vector
 IDX_DELTA_R_MIN: int = 0

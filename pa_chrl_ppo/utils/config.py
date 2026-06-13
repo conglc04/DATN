@@ -264,7 +264,7 @@ BETA_QP_FINAL: Final[float] = 0.6
 BETA_QP_ANNEAL_EPISODES: Final[int] = 5000  # T_anneal for linear schedule (Phase 3.2.2)
 BETA_QP_T_ANNEAL: Final[int] = BETA_QP_ANNEAL_EPISODES  # alias used by train.py
 
-# Worker observation layout indices (W05 40-dim formal spec)
+# Worker observation layout indices (33-dim formal spec, post LSTM+MEC removal)
 # Used by train.py + ablation baselines to overlay λ_local + mask phase
 PHASE_OH_OBS_INDEX: Final[int] = 10        # phase one-hot at obs[10:15]
 LAMBDA_LOCAL_OBS_INDEX: Final[int] = 17    # λ_local at obs[17:22]
