@@ -4,7 +4,6 @@ Verifies:
     - ppo_core utilities (compute_gae, ppo_clip_loss, value_loss, entropy_bonus)
     - ManagerAgent forward dims + decode squashing
     - WorkerAgent forward dims + decode squashing
-    - IdentityNSF returns detached a_raw
 """
 
 from __future__ import annotations
@@ -22,7 +21,6 @@ from agents.manager_agent import (
     ManagerCritic,
     decode_manager_action,
 )
-from agents.nsf import IdentityNSF
 from agents.ppo_core import compute_gae, entropy_bonus, ppo_clip_loss, value_loss
 from agents.worker_agent import (
     WORKER_ACTION_DIM_DEFAULT,
@@ -200,48 +198,13 @@ def test_decode_worker_action_rejects_wrong_shape():
 
 
 # ============================================================
-# IdentityNSF
+# Worker PPO update (clipped surrogate + GAE)
 # ============================================================
 
 
-def test_identity_nsf_numpy_passthrough():
-    nsf = IdentityNSF()
-    a = np.array([0.1, -0.2, 0.3, 0.4, 0.5, 0.6], dtype=np.float32)
-    out = nsf.forward(np.zeros(40), a)
-    assert isinstance(out, np.ndarray)
-    np.testing.assert_array_equal(out, a)
-
-
-def test_identity_nsf_tensor_detach():
-    """NSF identity must detach so β_qp distillation term has no grad path."""
-    nsf = IdentityNSF()
-    a = torch.tensor([0.1, 0.2, 0.3], requires_grad=True)
-    out = nsf.forward(None, a)
-    assert isinstance(out, torch.Tensor)
-    assert not out.requires_grad
-    assert torch.allclose(out, a.detach())
-
-
-def test_identity_nsf_callable_alias():
-    nsf = IdentityNSF()
-    a = np.array([1.0, 2.0], dtype=np.float32)
-    assert np.array_equal(nsf(None, a), nsf.forward(None, a))
-
-
-def test_identity_nsf_is_not_trained():
-    assert IdentityNSF().is_trained() is False
-
-
-# ============================================================
-# Integration: Worker β_qp distillation = 0 with IdentityNSF
-# ============================================================
-
-
-def test_worker_update_with_identity_nsf_zero_qp_distill():
-    """When a_safe = a_raw.detach(), β_qp distillation term is identically 0 vs
-    the mean network output. Verifies the W07 wiring assumption."""
+def test_worker_update_returns_finite_losses():
+    """Standard PPO update (no β_qp distillation — safety is closed-form Π_feasible)."""
     w = WorkerAgent(seed=0)
-    nsf = IdentityNSF()
     n = 32
     obs = np.random.randn(n, WORKER_STATE_DIM_DEFAULT).astype(np.float32)
     actions, log_probs, values = [], [], []
@@ -250,23 +213,15 @@ def test_worker_update_with_identity_nsf_zero_qp_distill():
         actions.append(a)
         log_probs.append(lp)
         values.append(v)
-    actions = np.stack(actions)
-    a_safe = np.stack([nsf.forward(o, a) for o, a in zip(obs, actions)])
-    np.testing.assert_array_equal(actions, a_safe)
-
     out = w.update(
         obs=obs,
-        actions_raw=actions,
+        actions_raw=np.stack(actions),
         old_log_probs=np.asarray(log_probs, dtype=np.float32),
         rewards=np.random.randn(n).astype(np.float32),
         values=np.asarray(values, dtype=np.float32),
         dones=np.zeros(n, dtype=np.float32),
         last_value=0.0,
-        actions_safe=a_safe,
-        beta_qp=0.1,
     )
-    assert "worker_qp_distill" in out
-    # Distillation should be small (≪ β_qp · ||raw||² since a_safe is the sample,
-    # not the mean; what matters is no NaN / explosion)
-    assert np.isfinite(out["worker_qp_distill"])
-    assert out["worker_qp_distill"] >= 0.0
+    assert "worker_qp_distill" not in out
+    assert np.isfinite(out["worker_actor_loss"])
+    assert np.isfinite(out["worker_critic_loss"])

@@ -4,7 +4,6 @@ Verifies (per docs/weeks/W08 Gate G3.2):
     - 5-episode smoke training without crash + no NaN
     - LambdaState integration (λ_global non-trivial after dual ascent)
     - Phase transition syncs both λ_global + λ_local (Fix Error 1)
-    - β_qp linear anneal schedule (per-episode, NOT per-step)
     - PPO buffer boundary = 1 episode (Phase 3.4.4 N8)
 """
 
@@ -17,79 +16,11 @@ from agents.lagrangian import LambdaState
 from train import (
     MANAGER_STEPS_PER_EPISODE,
     WORKER_STEPS_PER_EPISODE,
-    anneal_beta_qp,
     build_manager_state,
     overlay_lambda_local,
     train_pa_chrl_ppo,
 )
-from utils.config import (
-    BETA_QP_FINAL,
-    BETA_QP_INIT,
-    BETA_QP_T_ANNEAL,
-    LAMBDA_LOCAL_OBS_INDEX,
-)
-
-
-# ============================================================
-# β_qp anneal (Phase 3.2.2 / N6)
-# ============================================================
-
-
-def test_beta_qp_starts_at_init():
-    assert anneal_beta_qp(0) == pytest.approx(BETA_QP_INIT)
-
-
-def test_beta_qp_final_after_t_anneal():
-    assert anneal_beta_qp(BETA_QP_T_ANNEAL) == pytest.approx(BETA_QP_FINAL)
-    # Past T_anneal, clamps to final
-    assert anneal_beta_qp(BETA_QP_T_ANNEAL * 2) == pytest.approx(BETA_QP_FINAL)
-
-
-def test_beta_qp_midpoint_linear():
-    """At ep=T_anneal/2, β_qp should be the midpoint of [β_init, β_final]."""
-    mid = anneal_beta_qp(BETA_QP_T_ANNEAL // 2)
-    expected = BETA_QP_INIT + 0.5 * (BETA_QP_FINAL - BETA_QP_INIT)
-    assert mid == pytest.approx(expected, abs=1e-3)
-
-
-def test_beta_qp_monotonic_increasing():
-    samples = [anneal_beta_qp(ep) for ep in [0, 100, 500, 1000, 2500, 5000]]
-    assert all(b <= bnext for b, bnext in zip(samples, samples[1:]))
-
-
-def test_beta_qp_respects_floor():
-    """Reviewer Mn1 (Gemini W08, 2026-05-27): β_qp anneal never goes below BETA_QP_FLOOR.
-
-    Prevents catastrophic forgetting of NSF/QP safety boundaries at end-of-training.
-    Tests with synthetic config where β_init = β_final = 0 (would decay to 0 without floor).
-    """
-    from utils.config import BETA_QP_FLOOR
-
-    # Force anneal to a tiny value < FLOOR via custom args
-    val_at_end = anneal_beta_qp(
-        episode=10_000,
-        beta_init=0.0,
-        beta_final=0.0,
-        t_anneal=5000,
-    )
-    assert val_at_end >= BETA_QP_FLOOR - 1e-9, (
-        f"β_qp must be ≥ floor ({BETA_QP_FLOOR}). got {val_at_end}"
-    )
-
-    # Mid-anneal with tiny final should also respect floor
-    val_mid = anneal_beta_qp(
-        episode=2500,
-        beta_init=0.01,
-        beta_final=0.01,
-        t_anneal=5000,
-    )
-    assert val_mid >= BETA_QP_FLOOR - 1e-9, (
-        f"β_qp mid-anneal must be ≥ floor ({BETA_QP_FLOOR}). got {val_mid}"
-    )
-
-    # When raw anneal value > floor, floor doesn't bind (current config: 0.6 > 0.05)
-    val_normal = anneal_beta_qp(episode=0)
-    assert val_normal >= BETA_QP_FLOOR  # always at least floor
+from utils.config import LAMBDA_LOCAL_OBS_INDEX
 
 
 # ============================================================
@@ -206,7 +137,6 @@ def test_5_episode_smoke_no_nan(tmp_path):
         "ep_reward",
         "mean_e2e_ms",
         "viol_rate",
-        "beta_qp",
         "lambda_global_1",
         "lambda_global_2",
         "lambda_global_3",

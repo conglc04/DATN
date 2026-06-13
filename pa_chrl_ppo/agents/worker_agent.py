@@ -12,7 +12,6 @@ Output action dimensions (Phase 2.3.2):
 
 Reference:
     - docs/13_methodology_walkthrough.md Phase 3.3.3 (Worker arch)
-    - docs/13_methodology_walkthrough.md Phase 3.2.2 (β_qp distillation in loss)
     - Three-rate hierarchy locked: α_πL=1e-3 (Worker fastest)
 """
 
@@ -122,11 +121,10 @@ def decode_worker_action(a_raw: np.ndarray) -> dict[str, float | np.ndarray]:
 
 
 class WorkerAgent:
-    """xApp Worker — Gaussian PPO actor-critic with γ_L=0.99 + β_qp distillation.
+    """xApp Worker — Gaussian PPO actor-critic with γ_L=0.99 (clipped PPO + GAE).
 
-    PPO update accepts optional ``a_safe`` to add β_qp · ||a_safe - a_raw||² to
-    actor loss (Phase 3.2.2). When ``a_safe is None`` (e.g., IdentityNSF stub),
-    distillation term is zero by construction.
+    Safety is enforced downstream by the closed-form feasibility projection
+    Π_feasible (no learnable params); the Worker policy is standard PPO.
     """
 
     def __init__(
@@ -189,7 +187,7 @@ class WorkerAgent:
         )
 
     # ------------------------------------------------------------------
-    # PPO update with optional β_qp distillation (Phase 3.2.2)
+    # PPO update (clipped surrogate + GAE)
     # ------------------------------------------------------------------
 
     def update(
@@ -201,15 +199,8 @@ class WorkerAgent:
         values: np.ndarray,
         dones: np.ndarray,
         last_value: float,
-        actions_safe: np.ndarray | None = None,
-        beta_qp: float = 0.0,
     ) -> dict[str, float]:
-        """One PPO epoch sweep with γ_L = γ_WORKER.
-
-        If ``actions_safe`` and ``beta_qp > 0``, adds β_qp · ||a_safe - a_raw||²
-        distillation term to actor loss (mean across batch + action dims).
-        With IdentityNSF (a_safe == a_raw.detach()), the term is identically 0.
-        """
+        """One PPO epoch sweep with γ_L = γ_WORKER (clipped surrogate + entropy)."""
         n = len(rewards)
         if n == 0:
             return {}
@@ -224,13 +215,8 @@ class WorkerAgent:
         oldlp_t = torch.as_tensor(old_log_probs, dtype=torch.float32, device=self.device)
         adv_t = torch.as_tensor(advantages, dtype=torch.float32, device=self.device)
         ret_t = torch.as_tensor(returns, dtype=torch.float32, device=self.device)
-        if actions_safe is not None and beta_qp > 0:
-            safe_t = torch.as_tensor(actions_safe, dtype=torch.float32, device=self.device)
-        else:
-            safe_t = None
 
         last_actor_loss = last_critic_loss = last_entropy = last_clip_frac = 0.0
-        last_qp_distill = 0.0
         idx_all = np.arange(n)
         for _ in range(self.k_epochs):
             np.random.shuffle(idx_all)
@@ -251,13 +237,6 @@ class WorkerAgent:
                     new_log_probs, b_oldlp, b_adv, self.clip_eps
                 )
                 actor_loss = policy_loss - self.ent_coef * ent
-
-                # β_qp distillation term (Phase 3.2.2)
-                qp_distill = torch.tensor(0.0, device=self.device)
-                if safe_t is not None and beta_qp > 0:
-                    mean_raw = dist.mean
-                    qp_distill = beta_qp * ((safe_t[idx] - mean_raw) ** 2).mean()
-                    actor_loss = actor_loss + qp_distill
 
                 if not torch.isfinite(actor_loss):
                     continue
@@ -281,14 +260,12 @@ class WorkerAgent:
                 last_critic_loss = float(critic_loss.item())
                 last_entropy = float(ent.item())
                 last_clip_frac = float(clip_frac.item())
-                last_qp_distill = float(qp_distill.item())
 
         return {
             "worker_actor_loss": last_actor_loss,
             "worker_critic_loss": last_critic_loss,
             "worker_entropy": last_entropy,
             "worker_clip_fraction": last_clip_frac,
-            "worker_qp_distill": last_qp_distill,
             "worker_n_samples": n,
         }
 

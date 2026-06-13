@@ -9,24 +9,21 @@ Strict pipeline (docs/13_methodology_walkthrough.md Phase 3.4.1):
             For Worker FOR t in [0..W-1]:
                 s_L = env.observe() with λ_local overlay
                 a_raw, log_prob_L = worker.act(s_L)
-                a_safe = nsf.forward(s_L, a_raw)
-                next_s, r_t, info = env.step(a_safe)
+                next_s, r_t, info = env.step(a_raw)
                 r_aug = LambdaState.augmented_reward(r_t, c_vec, d_phi)
                 LambdaState.accumulate(c_vec, d_phi)
                 buf_L.add(...)
             buf_H.add(...)                                         # Manager rollout
             LambdaState.on_manager_step_end()                      # dual ascent + reset
-        PPO update Worker (γ_L = 0.99) + β_qp distillation
+        PPO update Worker (γ_L = 0.99)
         PPO update Manager (γ_H ≈ 0.904 per N1)
         Log: λ_global, λ_warm, viol_rate, losses
 
 Implementation notes (Phase 3.4.4 N1–N9):
     N1  γ_H = γ_L^W ≈ 0.904          (sourced from utils.config.GAMMA_MANAGER)
-    N2  a_safe.detach() inside Worker update qp distillation
     N3  Per-step phase threshold d_j^φ_t lookup from env.info["d_phi"]
     N4  λ_local exposed in Worker obs at indices [17:22] (already part of env._observe)
     N5  win_c reset after each Manager step (Option b)
-    N6  β_qp anneal per-episode (not per-step)
     N7  Dual update order: aggregate → mean → project → push → reset
     N8  PPO buffer boundary = 1 episode
     N9  Phase transition handled in LambdaState.on_manager_step_start (sync BOTH)
@@ -52,15 +49,10 @@ from agents.manager_agent import (
     MANAGER_STATE_DIM_DEFAULT,
     ManagerAgent,
 )
-from agents.nsf import IdentityNSF
 from agents.ppo_agent import RolloutBuffer
 from agents.worker_agent import WORKER_STATE_DIM_DEFAULT, WorkerAgent
 from env.oran_env import EnvConfig, ORANEnv, hard_mission_config
 from utils.config import (
-    BETA_QP_FINAL,
-    BETA_QP_FLOOR,
-    BETA_QP_INIT,
-    BETA_QP_T_ANNEAL,
     LAMBDA_LOCAL_OBS_INDEX,
     PHASE_OH_OBS_INDEX,
     WORKER_STEPS_PER_MANAGER,
@@ -80,26 +72,6 @@ WORKER_STEPS_PER_EPISODE: int = MANAGER_STEPS_PER_EPISODE * WORKER_STEPS_PER_MAN
 # ============================================================
 # β_qp anneal (Phase 3.2.2)
 # ============================================================
-
-
-def anneal_beta_qp(
-    episode: int,
-    beta_init: float = BETA_QP_INIT,
-    beta_final: float = BETA_QP_FINAL,
-    t_anneal: int = BETA_QP_T_ANNEAL,
-) -> float:
-    """Linear anneal β_qp from β_init → β_final over t_anneal episodes.
-
-    Reviewer Mn1 (Gemini W08, 2026-05-27): clamp at BETA_QP_FLOOR to prevent
-    catastrophic forgetting of NSF/QP safety boundaries at end-of-training.
-    Empirical: β_qp → 0 would let PPO drift away from QP imitation → violations
-    under out-of-distribution conditions (Exp11 sensor failure scenarios).
-    """
-    if t_anneal <= 0:
-        return max(BETA_QP_FLOOR, beta_final)
-    frac = min(float(episode) / float(t_anneal), 1.0)
-    raw = float(beta_init + (beta_final - beta_init) * frac)
-    return max(BETA_QP_FLOOR, raw)
 
 
 # ============================================================
@@ -164,9 +136,6 @@ def train_pa_chrl_ppo(
     checkpoint_dir: str = "checkpoints",
     checkpoint_every: int = 500,
     hard_mission: bool = False,
-    beta_qp_init: float = BETA_QP_INIT,
-    beta_qp_final: float = BETA_QP_FINAL,
-    beta_qp_t_anneal: int = BETA_QP_T_ANNEAL,
     worker_ent_coef: float = 0.01,
     manager_ent_coef: float = 0.01,
     disable_warm_start: bool = False,
@@ -187,7 +156,7 @@ def train_pa_chrl_ppo(
         f"Worker obs dim {state_dim_l} != {WORKER_STATE_DIM_DEFAULT}"
     )
 
-    # --- Setup agents (PA-CHRL-PPO + IdentityNSF + LambdaState) ---
+    # --- Setup agents (PA-CHRL-PPO + LambdaState) ---
     manager = ManagerAgent(
         state_dim=MANAGER_STATE_DIM_DEFAULT,
         action_dim=MANAGER_ACTION_DIM_DEFAULT,
@@ -202,7 +171,6 @@ def train_pa_chrl_ppo(
         seed=seed,
         ent_coef=worker_ent_coef,
     )
-    nsf = IdentityNSF()
     # Exp3 phase-transition ablation (CF-2 Audit Fix 2026-05-28):
     # disable_warm_start=True overrides default LAMBDA_WARM table with all-zero,
     # forcing cold-start dual ascent at every phase entry. Used to demonstrate
@@ -256,7 +224,6 @@ def train_pa_chrl_ppo(
         # Fresh PPO buffers per episode (Phase 3.4.4 N8)
         buf_w = _make_storage(capacity_w, state_dim_l, action_dim_l)
         buf_h = _make_storage(capacity_h, MANAGER_STATE_DIM_DEFAULT, MANAGER_ACTION_DIM_DEFAULT)
-        beta_qp = anneal_beta_qp(ep, beta_qp_init, beta_qp_final, beta_qp_t_anneal)
 
         ep_reward = 0.0
         worker_step_idx = 0
@@ -276,9 +243,8 @@ def train_pa_chrl_ppo(
                 # N4: expose λ_local through Worker observation
                 s_L = overlay_lambda_local(obs, lambda_state.get_lambda_local())
                 a_raw, log_prob_L, value_L = worker.act(s_L)
-                a_safe = nsf.forward(s_L, a_raw)
 
-                next_obs, r_t, terminated, truncated, info = env.step(np.asarray(a_safe, dtype=np.float32))
+                next_obs, r_t, terminated, truncated, info = env.step(np.asarray(a_raw, dtype=np.float32))
                 done = bool(terminated or truncated)
                 c_vec = np.asarray(info["c_vec"], dtype=np.float64)
                 d_phi = np.asarray(info["d_phi"], dtype=np.float64)
@@ -307,7 +273,7 @@ def train_pa_chrl_ppo(
                 break
 
         # ---------------- PPO updates at episode end (N8) ----------------
-        worker_metrics = _ppo_update_worker(worker, buf_w, beta_qp=beta_qp)
+        worker_metrics = _ppo_update_worker(worker, buf_w)
         manager_metrics = _ppo_update_manager(manager, buf_h)
 
         # Capture the active dual state before flushing final-phase warm starts.
@@ -324,7 +290,6 @@ def train_pa_chrl_ppo(
             "viol_rate": env.episode_violation_rate(),
             "mean_embb_mbps": env.mean_embb_mbps(),
             "c3_viol_rate": env.c3_violation_rate(),
-            "beta_qp": beta_qp,
             "phase_init": phase_init,
             "phase_final": int(info["phase_now"]),
             "lambda_phase": lambda_phase,
@@ -353,7 +318,7 @@ def train_pa_chrl_ppo(
                 f"[pa_chrl_ppo] ep {ep + 1}/{n_episodes}  "
                 f"R={ep_reward:+.2f}  e2e={metrics['mean_e2e_ms']:.3f}ms  "
                 f"viol={metrics['viol_rate']:.4f}  "
-                f"lambda_mean={float(np.mean(lam_g)):.3f}  beta_qp={beta_qp:.4f}"
+                f"lambda_mean={float(np.mean(lam_g)):.3f}"
                 f"{es_tag}  ({elapsed:.1f}s)"
             )
 
@@ -446,7 +411,7 @@ def _slice(buf) -> dict:
     return {k: v[:n] for k, v in buf.items() if isinstance(v, np.ndarray)}
 
 
-def _ppo_update_worker(worker, buf, beta_qp: float) -> dict[str, float]:
+def _ppo_update_worker(worker, buf) -> dict[str, float]:
     if buf["ptr"] == 0:
         return {"worker_n_samples": 0}
     sl = _slice(buf)
@@ -458,8 +423,6 @@ def _ppo_update_worker(worker, buf, beta_qp: float) -> dict[str, float]:
         values=sl["values"],
         dones=sl["dones"],
         last_value=0.0,
-        actions_safe=sl["actions"],   # IdentityNSF: a_safe == a_raw
-        beta_qp=beta_qp,
     )
 
 
@@ -536,18 +499,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--phase", type=int, default=3)
     parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument(
-        "--beta-qp-init", type=float, default=BETA_QP_INIT,
-        help="β_qp anneal start value (Phase 3.2.2; use 0 for IdentityNSF diagnostic)",
-    )
-    parser.add_argument(
-        "--beta-qp-final", type=float, default=BETA_QP_FINAL,
-        help="β_qp anneal endpoint value",
-    )
-    parser.add_argument(
-        "--beta-qp-t-anneal", type=int, default=BETA_QP_T_ANNEAL,
-        help="β_qp linear anneal horizon (episodes)",
-    )
-    parser.add_argument(
         "--worker-ent-coef", type=float, default=0.01,
         help="Worker actor entropy bonus coefficient (default 0.01; "
              "sweep ∈ {0.01, 0.03, 0.05, 0.1} per W10 Track A)",
@@ -594,9 +545,6 @@ def main() -> int:
             checkpoint_dir=str(args.checkpoint_dir),
             checkpoint_every=args.checkpoint_every,
             hard_mission=args.hard,
-            beta_qp_init=args.beta_qp_init,
-            beta_qp_final=args.beta_qp_final,
-            beta_qp_t_anneal=args.beta_qp_t_anneal,
             worker_ent_coef=args.worker_ent_coef,
             manager_ent_coef=args.manager_ent_coef,
             disable_warm_start=args.no_warm_start,

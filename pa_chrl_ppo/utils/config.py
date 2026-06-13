@@ -74,24 +74,6 @@ D_STOCH: Final[float] = 0.05e-3         # Stochastic RLC + retx mean (in M/G/1 �
 SAFETY_QP_PERIOD: Final[float] = 10e-3  # xApp QP control cycle
 ODU_LOCAL_CHECK: Final[float] = 0.5e-3  # O-DU local 1-TTI check
 
-# D_max_QP per phase = D_max^φ - D_det - D_fh - D_bh (air-side budget for QP)
-# Reference: Patch fix in plan file
-# D_max_QP^φ = D_max^φ − D_det(0.07) − D_fh(0.1) − D_bh(0.1) = D_max^φ − 0.27 ms.
-# Only DETERMINISTIC fixed delays are subtracted. E[D_stoch]=0.05ms is NOT subtracted
-# here because it is part of the M/G/1 service-time variance σ² (queue delay) that the
-# air-side QP/scheduler controls — see oran_env.py:692 (d_tx = service − D_stoch; D_stoch
-# enters d_queue via P-K σ²). Subtracting it again would double-count. (docs/04 §D_max_QP
-# previously subtracted it in error — that line is the stale one, not this.)
-# NOTE: currently UNUSED in training (IdentityNSF smoke regime); activates with real NSF/QP
-# (sub-phase D).
-D_MAX_QP_PHI: Final[dict[int, float]] = {
-    1: 19.73e-3,       # 20 - 0.27
-    2: 4.73e-3,        # 5  - 0.27
-    3: 0.73e-3,        # ← critical: 1 - 0.07 - 0.1 - 0.1
-    4: 1.73e-3,        # 2  - 0.27
-    5: 19.73e-3,
-}
-
 # ============================================================
 # Phase QoS table (5-phase FSM)
 # References:
@@ -245,24 +227,6 @@ LR_PI_H: Final[float] = 1e-5            # Manager / rApp (slow)
 LR_V_H: Final[float] = 5e-5             # Manager critic (slow)
 LR_PI_L: Final[float] = 1e-3            # Worker / xApp (fast)
 LR_V_L: Final[float] = 1e-3             # Worker critic (fast)
-LR_LSTM: Final[float] = 5e-4
-LR_NSF: Final[float] = 1e-3
-
-# Safety / β_qp anneal
-# W09 β_qp diagnostic verdict (2026-05-24, updated post-n=15):
-# Constant β_qp = 0.6 over the anneal schedule for IdentityNSF smoke regime.
-# Empirical justification: at 300 ep × n=15/15/10 A/B, β_qp = 0.6 delivers
-# 80% balance rate (12/15) vs 66.7% (10/15) at 0.5 vs 70% (7/10) at 0.7.
-# β_qp = 0.6 also has lowest total trap count (3 traps vs 5 at 0.5, 3 at 0.7)
-# and second-tightest balanced-cluster reward variance.
-# Working regime is the [0.5, 0.6] plateau; difference NOT statistically
-# significant (z=-0.83, p>0.05) but trend favors 0.6.
-# See logs_w9/summary.md §6 for full analysis.
-# Revert to anneal logic when real NSF MLP arrives (sub-phase D).
-BETA_QP_INIT: Final[float] = 0.6
-BETA_QP_FINAL: Final[float] = 0.6
-BETA_QP_ANNEAL_EPISODES: Final[int] = 5000  # T_anneal for linear schedule (Phase 3.2.2)
-BETA_QP_T_ANNEAL: Final[int] = BETA_QP_ANNEAL_EPISODES  # alias used by train.py
 
 # Worker observation layout indices (33-dim formal spec, post LSTM+MEC removal)
 # Used by train.py + ablation baselines to overlay λ_local + mask phase
@@ -293,14 +257,6 @@ R_REF_EMBB_MBPS: Final[float] = 100.0   # eMBB log-utility normalization anchor 
 # net, NOT an active constraint at convergence.
 # See docs/13 §2.3.3 + agents/lagrangian.py:191.
 LAMBDA_MAX: Final[float] = 10.0
-
-# Reviewer Mn1 (Gemini Section II W08, 2026-05-27):
-# β_qp anneal floor — residual policy-distillation pull preventing
-# catastrophic forgetting of NSF/QP safety boundaries at end-of-training.
-# Without floor, β_qp → 0 would let PPO drift away from QP imitation →
-# safety boundary violations under out-of-distribution conditions.
-# See docs/13 §3.2.2 + agents/pa_chrl_ppo.py.
-BETA_QP_FLOOR: Final[float] = 0.05
 
 # Hierarchical time scales (corrected 2026-05-20 to comply with O-RAN spec)
 #
@@ -350,17 +306,6 @@ HANDOVER_ETA_TRIGGER: Final[float] = 10.0   # seconds; pre-allocate when ETA < 1
 
 # Pre-tightening
 PRE_TIGHTEN_ETA: Final[float] = 30.0        # seconds; apply D_max^φ_next if ETA_next < 30s
-
-# ============================================================
-# NSF / OSQP runtime
-# Reference: docs/08_implementation_notes.md Bảng 4.2C
-# ============================================================
-NSF_TARGET_RUNTIME_MS: Final[float] = 1.0       # NSF target < 1ms
-OSQP_FALLBACK_RUNTIME_MS: Final[float] = 2.0    # OSQP fallback budget
-OSQP_MAX_ITER: Final[int] = 200
-OSQP_TIME_LIMIT_SEC: Final[float] = 2.0e-3
-OSQP_EPS_ABS: Final[float] = 1e-4
-OSQP_EPS_REL: Final[float] = 1e-4
 
 # ============================================================
 # LSTM specs

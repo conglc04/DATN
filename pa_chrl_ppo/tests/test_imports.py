@@ -34,11 +34,6 @@ def test_config_constants_match_docs():
     assert cfg.D_BH == 0.1e-3
     assert cfg.D_DET == 0.07e-3
 
-    # D_max_QP^φ₃ = 0.73 ms (critical: per Bug 1 fix)
-    assert abs(cfg.D_MAX_QP_PHI[3] - 0.73e-3) < 1e-9, (
-        f"D_max_QP^φ₃ mismatch: {cfg.D_MAX_QP_PHI[3]*1e3}ms"
-    )
-
 
 def test_phase_qos_table():
     """Phase QoS table must have all 5 phases with the right tightest budgets."""
