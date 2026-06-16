@@ -123,17 +123,18 @@ def test_manager_act_returns_correct_shapes():
 
 
 def test_decode_manager_action_bounds():
-    """b_rrm ∈ [0,1] (MEC offload f_MEC removed — B0b)."""
-    # Extreme positive raw
-    dec = decode_manager_action(np.array([10.0], dtype=np.float32))
-    assert 0.999 <= dec["b_rrm"] <= 1.0
+    """b_rrm ∈ [B_RRM_MIN, B_RRM_MAX] via sigmoid-affine mapping."""
+    from utils.config import B_RRM_MAX, B_RRM_MIN
+    # Extreme positive → asymptote near B_RRM_MAX
+    dec = decode_manager_action(np.array([100.0], dtype=np.float32))
+    assert B_RRM_MAX - 1e-4 <= dec["b_rrm"] <= B_RRM_MAX + 1e-9
     assert "f_mec" not in dec
-    # Extreme negative raw
-    dec = decode_manager_action(np.array([-10.0], dtype=np.float32))
-    assert 0.0 <= dec["b_rrm"] <= 1e-3
-    # Zero raw → 0.5 sigmoid
+    # Extreme negative → asymptote near B_RRM_MIN
+    dec = decode_manager_action(np.array([-100.0], dtype=np.float32))
+    assert B_RRM_MIN <= dec["b_rrm"] <= B_RRM_MIN + 1e-4
+    # Zero raw → midpoint (B_RRM_MIN + B_RRM_MAX) / 2
     dec = decode_manager_action(np.array([0.0], dtype=np.float32))
-    assert abs(dec["b_rrm"] - 0.5) < 1e-5
+    assert abs(dec["b_rrm"] - (B_RRM_MIN + B_RRM_MAX) / 2.0) < 1e-5
 
 
 # ============================================================

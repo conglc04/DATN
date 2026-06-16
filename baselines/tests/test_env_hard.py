@@ -1,11 +1,10 @@
 """Tests for the hard-mission env (Option 3 — Week 5 follow-up).
 
 Verifies:
-    - phase_trajectory fires transitions at the configured sim_time mark
     - urllc_burst window multiplies the arrival rate
     - bystander spike raises eMBB UE count during the burst window
     - configurable SINR clamp + BS TX power
-    - hard_mission_config preset builds without error
+    - hard_mission_config preset builds without error (fixed IMMEDIATE severity)
     - Backward compatibility: default EnvConfig still satisfies Gate P2
 """
 
@@ -20,50 +19,28 @@ def _zero_action():
 
 
 # ============================================================
-# Phase trajectory
+# Severity (fixed per episode — phase trajectory removed 2026-06-14)
 # ============================================================
 
 
-class TestPhaseTrajectory:
-    def test_initial_phase_from_trajectory_overrides_initial_phase_field(self):
-        from env.oran_env import EnvConfig, ORANEnv, Phase
+class TestSeverityFixed:
+    def test_initial_severity_respected(self):
+        from env.oran_env import EnvConfig, ORANEnv
 
-        cfg = EnvConfig(
-            initial_phase=3,                             # would be ignored
-            phase_trajectory=((0.0, 1), (0.4, 3)),       # explicit start at φ₁
-        )
-        env = ORANEnv(config=cfg, seed=0)
-        env.reset(seed=0)
-        assert env.phase_dets[0].current_phase == Phase.STANDBY
+        env = ORANEnv(config=EnvConfig(initial_severity=3), seed=0)
+        _, info = env.reset(seed=0)
+        assert info["severity"] == 3
+        assert info["severity_name"] == "URGENT"
 
-    def test_trajectory_advances_at_scheduled_time(self):
-        from env.oran_env import EnvConfig, ORANEnv, Phase
+    def test_severity_constant_across_episode(self):
+        from env.oran_env import EnvConfig, ORANEnv
 
-        cfg = EnvConfig(
-            phase_trajectory=((0.0, 1), (0.1, 2), (0.2, 3)),
-            initial_phase=1,
-        )
-        env = ORANEnv(config=cfg, seed=0)
+        env = ORANEnv(config=EnvConfig(initial_severity=5), seed=0)
         env.reset(seed=0)
         a = _zero_action()
-        # 1 Worker step = 10 ms. 10 steps -> sim_time = 0.1 s -> phase advances to DISPATCH.
-        for _ in range(10):
-            env.step(a)
-        assert env.phase_dets[0].current_phase == Phase.DISPATCH
-
-        # 10 more steps -> sim_time = 0.2 s -> phase advances to SCENE.
-        for _ in range(10):
-            env.step(a)
-        assert env.phase_dets[0].current_phase == Phase.SCENE
-
-    def test_no_trajectory_keeps_initial_phase(self):
-        from env.oran_env import EnvConfig, ORANEnv, Phase
-
-        env = ORANEnv(config=EnvConfig(initial_phase=3), seed=0)
-        env.reset(seed=0)
         for _ in range(50):
-            env.step(_zero_action())
-        assert env.phase_dets[0].current_phase == Phase.SCENE
+            _, _, _, _, info = env.step(a)
+            assert info["severity"] == 5   # never changes mid-episode
 
 
 # ============================================================
@@ -104,7 +81,7 @@ class TestUrllcBurst:
         for _ in range(50):
             env.step(a)
         # During burst, queue arrival rate ≈ 500 (instead of 50)
-        assert env.queues["urllc"].arrival_rate == pytest.approx(500.0, rel=1e-6)
+        assert env.queues["urllc_0"].arrival_rate == pytest.approx(500.0, rel=1e-6)
 
     def test_no_burst_keeps_base_rate(self):
         from env.oran_env import EnvConfig, ORANEnv
@@ -113,7 +90,7 @@ class TestUrllcBurst:
         env.reset(seed=0)
         for _ in range(10):
             env.step(_zero_action())
-        assert env.queues["urllc"].arrival_rate == pytest.approx(50.0, rel=1e-6)
+        assert env.queues["urllc_0"].arrival_rate == pytest.approx(50.0, rel=1e-6)
 
 
 # ============================================================
@@ -209,12 +186,12 @@ class TestHardMissionConfig:
     def test_preset_builds(self):
         from env.oran_env import hard_mission_config, ORANEnv
         env = ORANEnv(config=hard_mission_config(), seed=0)
-        env.reset(seed=0)
+        _, info = env.reset(seed=0)
         assert env.bystander is not None
-        assert env.config.phase_trajectory[0][1] == 1
+        assert info["severity"] == 5            # hard mission = IMMEDIATE
 
     def test_full_episode_no_crash(self):
-        from env.oran_env import hard_mission_config, ORANEnv, Phase
+        from env.oran_env import hard_mission_config, ORANEnv
 
         env = ORANEnv(config=hard_mission_config(), seed=42)
         env.reset(seed=42)
@@ -222,12 +199,13 @@ class TestHardMissionConfig:
         # Step through entire 1s episode
         steps = 0
         truncated = False
+        info = {}
         while not truncated and steps < 2100:
-            _, _, _, truncated, _ = env.step(a)
+            _, _, _, truncated, info = env.step(a)
             steps += 1
         assert truncated
-        # Ended in φ₅ RETURN per trajectory
-        assert env.phase_dets[0].current_phase == Phase.RETURN
+        # Severity stays IMMEDIATE for the whole episode (fixed exogenous)
+        assert info["severity"] == 5
 
     def test_burst_creates_violations_for_static_policy(self):
         """Static (zero-action) policy under hard mission should violate sometimes."""
@@ -257,7 +235,7 @@ class TestBackwardCompat:
         from env.oran_env import EnvConfig, ORANEnv
 
         env = ORANEnv(
-            config=EnvConfig(initial_phase=3, rrm_budget_hint=0.6,
+            config=EnvConfig(initial_severity=3, rrm_budget_hint=0.6,
                               urllc_arrival_rate=50.0, K_ambulances=1, M_eMBB=30),
             seed=42,
         )
@@ -266,4 +244,4 @@ class TestBackwardCompat:
         for _ in range(200):
             env.step(a)
         assert env.mean_e2e_ms() < 1.0
-        assert env.queues["urllc"].is_stable
+        assert env.queues["urllc_0"].is_stable

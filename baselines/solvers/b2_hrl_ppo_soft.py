@@ -1,7 +1,7 @@
 """B2 — HRL-PPO soft baseline.
 
 Same 2-level conceptual hierarchy as PPO, but with:
-    USE_PHASE_FSM    = False   (phase masked out of obs)
+    USE_SEVERITY     = False   (severity one-hot masked out of obs)
     USE_CMDP         = False   (no Lagrangian, soft penalty only)
 
 Reference: docs/06_validation.md:16-28
@@ -17,7 +17,7 @@ from __future__ import annotations
 import numpy as np
 
 from agents.ppo_agent import PPOAgent
-from solvers._common import BaselineFlags, mask_phase
+from solvers._common import BaselineFlags, mask_severity
 
 
 BETA_SOFT_DEFAULT: float = 20.0
@@ -37,7 +37,7 @@ class B2HRLPPOSoftBaseline:
                             seed=seed, device=device)
 
     def maybe_mask(self, obs):
-        return mask_phase(obs)        # B2 hides phase
+        return mask_severity(obs)     # B2 hides severity
 
     def select_action(self, obs, deterministic: bool = False):
         return self.ppo.select_action(self.maybe_mask(obs), deterministic=deterministic)

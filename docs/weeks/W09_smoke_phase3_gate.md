@@ -13,4 +13,4 @@
 - λ healthy (no blow-up tới Λ_max=10 vô hạn); corner behaviours reproduced; constraint binding đúng active-set.
 
 ## Liên kết
-- λ-saturation logging (rủi ro diagnostic) chính thức hoá ở [W19](W19_pha3_e1_baseline_sumo.md)/A-E1.2d. Tune → [W10](W10_tune_multiseed_prep.md).
+- λ-saturation logging (rủi ro diagnostic) chính thức hoá ở [W19](W19_pha3_ppo_k3.md)/A-E1.2d. Tune → [W10](W10_tune_multiseed_prep.md).

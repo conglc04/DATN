@@ -20,11 +20,14 @@ from pathlib import Path
 
 import numpy as np
 
+from agents.manager_agent import decode_manager_action
 from agents.ppo_agent import RolloutBuffer
 from env.oran_env import EnvConfig, ORANEnv
+from solvers._common import _manager_act, build_manager_state
 from utils.config import WORKER_STEPS_PER_MANAGER
 from utils.early_stopping import EarlyStopping
 from utils.logger import Logger
+from utils.obs import overlay_lambda_local  # single-source λ overlay (shared with train.py)
 
 
 BASELINE_REGISTRY = {
@@ -33,14 +36,14 @@ BASELINE_REGISTRY = {
 }
 
 
-def make_baseline(name: str, state_dim: int, action_dim: int, seed: int, device: str = "cpu"):
+def make_baseline(name: str, state_dim: int, action_dim: int, seed: int, device: str = "cpu", K: int = 1):
     if name not in BASELINE_REGISTRY:
         raise ValueError(f"Unknown baseline: {name}. Choose from {list(BASELINE_REGISTRY)}")
     mod_path, cls_name = BASELINE_REGISTRY[name].split(":")
     import importlib
     mod = importlib.import_module(mod_path)
     cls = getattr(mod, cls_name)
-    return cls(state_dim=state_dim, action_dim=action_dim, seed=seed, device=device)
+    return cls(state_dim=state_dim, action_dim=action_dim, seed=seed, device=device, K=K)
 
 
 def train(
@@ -48,7 +51,7 @@ def train(
     n_episodes: int,
     seed: int = 0,
     log_dir: str = "logs",
-    initial_phase: int = 3,
+    initial_severity: int = 5,
     urllc_lambda: float = 50.0,
     M_eMBB: int = 30,
     device: str = "cpu",
@@ -78,14 +81,15 @@ def train(
         env_cfg = hard_mission_config()
     else:
         env_cfg = EnvConfig(
-            initial_phase=initial_phase,
+            initial_severity=initial_severity,
             urllc_arrival_rate=urllc_lambda,
             M_eMBB=M_eMBB,
         )
     env = ORANEnv(config=env_cfg, seed=seed)
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
-    agent = make_baseline(baseline_name, state_dim, action_dim, seed, device=device)
+    K = env.config.K_ambulances
+    agent = make_baseline(baseline_name, state_dim, action_dim, seed, device=device, K=K)
 
     # Resume from checkpoint if provided
     if resume_checkpoint is not None:
@@ -104,16 +108,28 @@ def train(
         "n_episodes": n_episodes,
         "seed": seed,
         "state_dim": state_dim,
-        "initial_phase": initial_phase,
+        "initial_severity": initial_severity,
     })
 
     # Detect API surface
     has_lambda_state = hasattr(agent, "lambda_state")     # NEW 5-dim (TD3 + SAC siblings)
     has_old_lagrangian = hasattr(agent, "lagrangian")     # OLD 2-dim (ablation only)
     is_off_policy = hasattr(agent, "store_transition")
+    has_manager = hasattr(agent, "manager")               # algorithm-matched Manager (TD3/SAC)
     buffer = None
     if hasattr(agent, "ppo") and not is_off_policy:
         buffer = RolloutBuffer(capacity=2010, state_dim=state_dim, action_dim=action_dim)
+
+    def _state_with_lambda(raw_obs: np.ndarray) -> np.ndarray:
+        """Inject the CURRENT λ_local into obs[17:22] (Markov state for the CMDP).
+
+        Single source of truth = utils.obs.overlay_lambda_local, identical to the
+        PPO path in train.py. Solvers without a 5-dim LambdaState (static / old
+        2-dim ablations) keep the raw obs unchanged.
+        """
+        if has_lambda_state:
+            return overlay_lambda_local(raw_obs, agent.lambda_state.get_lambda_local(), K)
+        return raw_obs.astype(np.float32, copy=False)
 
     es = EarlyStopping(
         patience=early_stop_patience,
@@ -132,20 +148,34 @@ def train(
         if buffer is not None:
             buffer.reset()
 
-        # ---- NEW LambdaState lifecycle: sync λ_global + λ_local from λ_warm[φ_init] ----
+        # ---- NEW LambdaState lifecycle: sync λ_global + λ_local from λ_warm[severity] ----
         if has_lambda_state:
-            agent.on_episode_start(int(info["phase_now"]))
-            agent.on_manager_step_start(int(info["phase_now"]))
+            severity_per_amb_init = tuple(int(s) for s in info["severity_per_amb"])
+            severity_init = int(info["severity"])
+            agent.on_episode_start(severity_per_amb_init, severity_init)
+            agent.on_manager_step_start(severity_per_amb_init, severity_init)
 
         ep_reward = 0.0
         worker_step_idx = 0
         terminated = truncated = False
+        # State carries the λ active for THIS decision (built post warm-start sync).
+        s = _state_with_lambda(obs)
+        # Manager initialization — set RRM budget for the first Manager window
+        r_H_acc = 0.0
+        s_H_prev = None
+        a_H_raw_prev = None
+        if has_manager and has_lambda_state:
+            s_H = build_manager_state(obs, agent.lambda_state.get_lambda_global())
+            a_H_raw = _manager_act(agent.manager, s_H)
+            b_rrm = decode_manager_action(a_H_raw)["b_rrm"]
+            env.set_rrm_budget(b_rrm)
+            s_H_prev, a_H_raw_prev = s_H, a_H_raw
         while not (terminated or truncated):
-            obs_masked = agent.maybe_mask(obs)
-            action, log_prob, value = agent.select_action(obs)
+            action, log_prob, value = agent.select_action(s)
             next_obs, reward, terminated, truncated, info = env.step(action)
+            done = bool(terminated or truncated)
 
-            # === Augmented reward + λ accumulation ===
+            # === Augmented reward + λ accumulation (use the λ embedded in `s`) ===
             if has_lambda_state:
                 c_vec = info["c_vec"]
                 d_phi = info["d_phi"]
@@ -161,7 +191,7 @@ def train(
                     from solvers._common import estimate_constraints
                     cons = estimate_constraints(
                         recent_d_e2e, embb_mbps=20.0,
-                        aoi_samples=None, phase=initial_phase,
+                        aoi_samples=None, severity=initial_severity,
                     )
                     aug = agent.augment_reward(float(reward), cons)
             else:
@@ -171,26 +201,54 @@ def train(
                     else float(reward)
                 )
 
+            if has_manager:
+                r_H_acc += float(aug)
+
+            worker_step_idx += 1
+
+            # === Manager step boundary: dual ascent + severity resync BEFORE s' ===
+            # Timing convention (off-policy correctness): the λ embedded in `s`
+            # is the PRE-update dual and is exactly the λ used for `aug` above.
+            # The dual ascent fires here, so the next state `s_next` carries the
+            # POST-update λ — the dual the next action will actually be
+            # conditioned on. This keeps each replayed (s, a, r, s') tuple
+            # self-consistent for the off-policy critic.
+            if has_lambda_state and worker_step_idx % WORKER_STEPS_PER_MANAGER == 0:
+                agent.on_manager_step_end()
+                if has_manager:
+                    s_H_next_mgr = build_manager_state(next_obs, agent.lambda_state.get_lambda_global())
+                    if s_H_prev is not None:
+                        agent.manager.store(s_H_prev, a_H_raw_prev, r_H_acc, s_H_next_mgr, done)
+                        agent.manager.update()
+                    r_H_acc = 0.0
+                if not done:
+                    severity_per_amb_now = tuple(int(s) for s in info["severity_per_amb"])
+                    severity_ref_now = int(info["severity"])
+                    agent.on_manager_step_start(severity_per_amb_now, severity_ref_now)
+                    if has_manager:
+                        a_H_raw = _manager_act(agent.manager, s_H_next_mgr)
+                        b_rrm = decode_manager_action(a_H_raw)["b_rrm"]
+                        env.set_rrm_budget(b_rrm)
+                        s_H_prev = s_H_next_mgr
+                        a_H_raw_prev = a_H_raw
+
+            s_next = _state_with_lambda(next_obs)
+
             # === Store transition / sample (PPO buffer vs TD3 off-policy) ===
-            done = bool(terminated or truncated)
             if buffer is not None:
                 buffer.add(
-                    obs_masked.astype(np.float32), action.astype(np.float32),
+                    agent.maybe_mask(s).astype(np.float32), action.astype(np.float32),
                     log_prob, aug, value, done,
                 )
             elif is_off_policy:
-                agent.store_transition(obs, action.astype(np.float32), aug, next_obs, done)
+                # store_transition applies maybe_mask internally; s / s_next
+                # already carry λ (and the severity one-hot for severity-aware solvers).
+                agent.store_transition(s, action.astype(np.float32), aug, s_next, done)
                 agent.update()
 
             obs = next_obs
+            s = s_next
             ep_reward += float(aug)
-            worker_step_idx += 1
-
-            # === Manager step boundary: dual ascent + phase resync ===
-            if has_lambda_state and worker_step_idx % WORKER_STEPS_PER_MANAGER == 0:
-                agent.on_manager_step_end()
-                if not done:
-                    agent.on_manager_step_start(int(info["phase_now"]))
 
             if buffer is not None and buffer.full:
                 buffer.compute_gae(last_value=0.0)
@@ -207,17 +265,23 @@ def train(
         # already on a Manager boundary)
         if has_lambda_state and worker_step_idx % WORKER_STEPS_PER_MANAGER != 0:
             agent.on_manager_step_end()
+            if has_manager and s_H_prev is not None:
+                s_H_final = build_manager_state(obs, agent.lambda_state.get_lambda_global())
+                agent.manager.store(s_H_prev, a_H_raw_prev, r_H_acc, s_H_final, True)
+                agent.manager.update()
         if has_lambda_state:
             lam_for_log = agent.lambda_state.get_lambda_global()
-            lambda_phase_for_log = int(agent.lambda_state.phi_prev)
-            agent.lambda_state.on_episode_end(final_phase=int(info["phase_now"]))
+            lambda_severity_for_log = str(list(agent.lambda_state.sev_prev))
+            severity_per_amb_final = tuple(int(s) for s in info["severity_per_amb"])
+            severity_ref_final = int(info["severity"])
+            agent.lambda_state.on_episode_end(severity_per_amb_final, severity_ref_final)
 
         # OLD API: dual-ascent at end of episode (NOT per Manager step)
         if has_old_lagrangian and not has_lambda_state:
             from solvers._common import estimate_constraints
             cons_ep = estimate_constraints(
                 env.e2e_history, embb_mbps=20.0,
-                aoi_samples=None, phase=initial_phase,
+                aoi_samples=None, severity=initial_severity,
             )
             if hasattr(agent, "compute_constraints"):
                 cons_ep = agent.compute_constraints(env.e2e_history)
@@ -235,9 +299,13 @@ def train(
         }
         if has_lambda_state:
             lam = lam_for_log
-            metrics["lambda_phase"] = lambda_phase_for_log
-            for j in range(5):
-                metrics[f"lambda_global_{j + 1}"] = float(lam[j])
+            metrics["lambda_severity_per_amb"] = lambda_severity_for_log
+            for k in range(K):
+                metrics[f"lambda_global_C1_{k}"] = float(lam[k])
+                metrics[f"lambda_global_C2_{k}"] = float(lam[K + k])
+                metrics[f"lambda_global_C4_{k}"] = float(lam[2 * K + k])
+                metrics[f"lambda_global_C5_{k}"] = float(lam[3 * K + k])
+            metrics["lambda_global_C3_shared"] = float(lam[4 * K])
         elif has_old_lagrangian:
             for j, lam_j in enumerate(agent.lagrangian.lambdas):
                 metrics[f"lambda_{j + 1}"] = float(lam_j)
@@ -307,7 +375,7 @@ def train(
     if has_lambda_state:
         summary["final_lambdas"] = agent.lambda_state.get_lambda_global().tolist()
         summary["final_lambda_warm"] = {
-            int(k): v.tolist() for k, v in agent.lambda_state.get_lambda_warm_table_snapshot().items()
+            str(k): v.tolist() for k, v in agent.lambda_state.get_lambda_warm_table_snapshot().items()
         }
     elif has_old_lagrangian:
         summary["final_lambdas"] = agent.lagrangian.lambdas.tolist()
@@ -331,7 +399,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--episodes", type=int, default=100)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--log-dir", type=str, default="logs")
-    p.add_argument("--phase", type=int, default=3)
+    p.add_argument("--severity", type=int, default=5,
+                   help="Fixed patient severity 1..5 (NON_URGENT..IMMEDIATE)")
     p.add_argument("--device", type=str, default="cpu")
     p.add_argument("--print-every", type=int, default=10)
     p.add_argument("--checkpoint-every", type=int, default=500)
@@ -348,7 +417,7 @@ def main(argv: list[str] | None = None) -> int:
         n_episodes=args.episodes,
         seed=args.seed,
         log_dir=args.log_dir,
-        initial_phase=args.phase,
+        initial_severity=args.severity,
         device=args.device,
         print_every=args.print_every,
         use_wandb=args.wandb,

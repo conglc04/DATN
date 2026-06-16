@@ -8,12 +8,12 @@ Severity-Aware Intra-slice Scheduling cho 5G O-RAN ambulance (Hà Nội, single-
 | Doc | Nội dung |
 |---|---|
 | [01_overview](01_overview.md) | Bối cảnh, đóng góp (severity headline), scope |
-| [02_requirements](02_requirements.md) | Phase QoS, severity, constraints C1–C6, scenario MCI |
-| [03_architecture](03_architecture.md) | O-RAN topology, channel UMi single-cell, phase FSM |
+| [02_requirements](02_requirements.md) | Severity QoS, severity, constraints C1–C6, scenario MCI |
+| [03_architecture](03_architecture.md) | O-RAN topology, channel UMi single-cell, severity exogenous |
 | [04_data_flow](04_data_flow.md) | D_e2e decomposition (no MEC), AoI model |
 | [05_agent_workflow](05_agent_workflow.md) | HRL 2-tier, RRMPolicyRatio, Lagrangian, projection |
 | [06_validation](06_validation.md) | 3 solver (PPO, TD3, SAC), sweep K∈{1,3} → Table I/II (E3/E4 future work), stats discipline |
-| [07_api_spec](07_api_spec.md) | obs (33/58) + action (6/7 +β) spec |
+| [07_api_spec](07_api_spec.md) | obs (31/51) + action (6/7 +β) spec |
 | [08_implementation_notes](08_implementation_notes.md) | Code map, removals (LSTM/MEC/vital/β_qp) |
 | [09_execution_plan](09_execution_plan.md) | Tổng quan lịch tuần W01–W24 |
 | [10_risks](10_risks.md) | Risk register (🔴/🟡) |

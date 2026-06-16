@@ -11,7 +11,7 @@ Ablation variants (equal-weight / phase-only / severity-only / full) → Table I
 
 ## Solver sweep (W18–W23, mobility = SUMO duy nhất, RWP bỏ)
 Sweep tuần tự **3 solver × K∈{1,3}** (6 cell), env config khóa (gNB=`(0,0)`, R_cell=300m, UMi single-cell, no handover):
-- **PPO** K=1 [W18](weeks/W18_pha3_algorithm_code.md) → K=3 [W19](weeks/W19_pha3_e1_baseline_sumo.md); **TD3** K=1 [W20](weeks/W20_pha3_e2_severity_headline.md) → K=3 [W21](weeks/W21_formulation_completeness.md); **SAC** K=1 [W22](weeks/W22_sac_k1.md) → K=3 [W23](weeks/W23_sac_k3.md).
+- **PPO** K=1 [W18](weeks/W18_pha3_algorithm_code.md) → K=3 [W19](weeks/W19_pha3_ppo_k3.md); **TD3** K=1 [W20](weeks/W20_pha3_td3_k1.md) → K=3 [W21](weeks/W21_pha3_td3_k3.md); **SAC** K=1 [W22](weeks/W22_sac_k1.md) → K=3 [W23](weeks/W23_sac_k3.md).
 - **Table I** = 3 solver × K∈{1,3}: reward + C1–C5 violation-rate + λ-saturation. **Table II** (K=3) = severity/intra-slice metrics + ablation 2×2.
 
 ### Future work (D26, 2026-06-12)
@@ -36,7 +36,7 @@ Jain thuần thưởng phân bổ ĐỀU ⟹ **mâu thuẫn** severity priority.
 Trục phase∈{off,on} × severity∈{off,on} → equal/phase-only/severity-only/full. Mỗi cặp kề khác đúng 1 trục → đo đóng góp riêng từng thành phần.
 
 ## Verification checklist
-- [ ] obs K=1=33 / K=3=58 (assert); action 6/7-dim (+β); reward single-term; 3 solver (PPO + TD3 + SAC).
+- [ ] obs K=1=31 / K=3=51 (assert); action 6/7-dim (+β); reward single-term; 3 solver (PPO + TD3 + SAC).
 - [ ] Mọi M*/P*/A* có nhãn ✅/🟡/🔴; 0 citation gán file chưa mở.
 - [ ] structural guarantee (feasibility + ordering) verify bằng test.
 - [ ] KHÔNG over-claim: no zero-duality-gap, no regret bound, no fake vitals, no ε=1e-5 empirical.

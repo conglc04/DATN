@@ -120,9 +120,10 @@ class TestTD3Baseline:
         """on_episode_start → on_manager_step_start → accumulate → on_manager_step_end."""
         from solvers.td3 import TD3Baseline
         agent = TD3Baseline(state_dim=40, action_dim=6, seed=0, alpha_lambda=0.5)
-        agent.on_episode_start(3)
-        agent.on_manager_step_start(3)
+        agent.on_episode_start((3,), 3)
+        agent.on_manager_step_start((3,), 3)
         # Heavy URLLC violation: positive c_vec[0..1] - d_phi[0..1]
+        # (4K+1)-dim layout [C1_0, C2_0, C4_0, C5_0, C3_shared] at K=1.
         c_vec = np.array([10e-3, 0.5, 0.0, 0.0, 0.0])  # c1 = 10ms; c2 = 50% viol
         d_phi = np.array([1e-3, 1e-5, 0.0, 0.0, 0.0])
         for _ in range(10):
@@ -133,13 +134,15 @@ class TestTD3Baseline:
         assert lam[0] > 0
         assert lam[1] > 0
 
-    def test_mask_phase_in_obs(self):
-        from solvers._common import PHASE_OH_START_INDEX, PHASE_OH_LEN
+    def test_keeps_phase_in_obs(self):
+        # TD3 is a phase-AWARE equal sibling (use_phase=True): maybe_mask must
+        # leave the phase one-hot intact. (Regression: it used to mask phase,
+        # making TD3 phase-blind and the PPO/TD3/SAC comparison unfair.)
         from solvers.td3 import TD3Baseline
         agent = TD3Baseline(state_dim=40, action_dim=6, seed=0)
+        assert agent.flags.use_phase is True
         obs = np.arange(40, dtype=np.float32)
-        masked = agent.maybe_mask(obs)
-        assert np.all(masked[PHASE_OH_START_INDEX:PHASE_OH_START_INDEX + PHASE_OH_LEN] == 0.0)
+        np.testing.assert_array_equal(agent.maybe_mask(obs), obs)
 
 
 class TestTD3SmokeTrainOneEpisode:
@@ -152,9 +155,43 @@ class TestTD3SmokeTrainOneEpisode:
             n_episodes=1,
             seed=0,
             log_dir="logs/_smoke_unittest_td3",
-            initial_phase=3,
+            initial_severity=3,
             print_every=10_000,
             checkpoint_every=0,
         )
         assert "ep_reward" in stats
         assert np.isfinite(stats["ep_reward"])
+
+
+class TestSolverObservesLambda:
+    """Regression guard: the driver MUST inject the current λ into obs[17:22].
+
+    Previously smoke_train fed raw obs to TD3/SAC, so they observed λ=0 forever
+    (non-stationary target, unfair vs PPO). This spies on the single-source
+    overlay to prove the loop calls it with the real (nonzero) dual.
+    """
+
+    def test_smoke_train_injects_nonzero_lambda(self, monkeypatch):
+        import solvers.smoke_train as st
+
+        seen = {"calls": 0, "nonzero": False}
+        real = st.overlay_lambda_local
+
+        def spy(obs, lam, K):
+            seen["calls"] += 1
+            if np.any(np.asarray(lam) != 0.0):
+                seen["nonzero"] = True
+            return real(obs, lam, K)
+
+        monkeypatch.setattr(st, "overlay_lambda_local", spy)
+        st.train(
+            baseline_name="td3",
+            n_episodes=1,
+            seed=0,
+            log_dir="logs/_smoke_unittest_td3_lambda",
+            initial_severity=3,          # φ3 warm-start λ is clearly nonzero
+            print_every=10_000,
+            checkpoint_every=0,
+        )
+        assert seen["calls"] > 0, "driver never overlaid λ into obs (TD3 would be λ-blind)"
+        assert seen["nonzero"], "λ injected at φ3 should be nonzero (LAMBDA_WARM[3])"

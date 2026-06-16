@@ -10,8 +10,8 @@
 |---|---|---|
 | [W01](W01_foundation.md) | Repo + config + test infra | G0 |
 | [W02](W02_env_channel_queue_traffic.md) | Env I: channel + queue M/G/1 + traffic | G1.1 |
-| [W03](W03_env_phase_aoi.md) | Env II: phase 5-FSM + AoI (MEC+vital GỠ) | G1.2 |
-| [W04](W04_oran_env_sanity.md) | ORANEnv + sanity (obs K=1=33) | G1 |
+| [W03](W03_env_phase_aoi.md) | Env II: severity exogenous (thay phase 5-FSM, swap 2026-06-14) + AoI (MEC+vital GỠ) | G1.2 |
+| [W04](W04_oran_env_sanity.md) | ORANEnv + sanity (obs K=1=31; lịch sử 33) | G1 |
 | [W05](W05_reward_constraint_tracking.md) | Reward single-term + 5-constraint tracking | G2.1 |
 | [W06](W06_lagrangian_standalone.md) | Lagrangian standalone (Pha 2 complete) | G2 |
 | [W07](W07_apply_three_solvers.md) | 3 solver: PPO + TD3 + SAC | G3.1 |
@@ -27,12 +27,12 @@
 | [W13](W13_pha1_delay_reliability_qos.md) | 1 | Delay E2E + reliability + QoS 3GPP (M4–M6) | 1B |
 | [W14](W14_pha1_aoi_traffic.md) | 1 | AoI + traffic (MEC GỠ) (M7–M8) | 1C |
 | [W15](W15_pha1_sumo_mobility.md) | 1 | Mobility SUMO/OSM (RWP bỏ) (M10) | 1D |
-| [W16](W16_pha1_severity_naca.md) | 1 | Severity NACA-S exogenous (M11) | **1E** |
+| [W16](W16_pha1_severity_triage.md) | 1 | Severity ATS 5-level exogenous (M11) | **1E** |
 | [W17](W17_pha2_cmdp_formulation.md) | 2 | CMDP: objective + C1–C6 + Lagrangian + intra-slice (P1–P5) | **2** |
-| [W18](W18_pha3_algorithm_code.md) | 3 | Code K≥2 (B0/B0b+B5, assert obs 33/58) + **PPO K=1** | **3A** |
-| [W19](W19_pha3_e1_baseline_sumo.md) | 3 | **PPO K=3** (severity + intra-slice) | **3B** |
-| [W20](W20_pha3_e2_severity_headline.md) | 3 | **TD3 K=1** | **3C** |
-| [W21](W21_formulation_completeness.md) | 3 | **TD3 K=3** (severity + intra-slice) | **3D** |
+| [W18](W18_pha3_algorithm_code.md) | 3 | Code K≥2 (B0/B0b+B5, assert obs 31/51) + **PPO K=1** | **3A** |
+| [W19](W19_pha3_ppo_k3.md) | 3 | **PPO K=3** (severity + intra-slice) | **3B** |
+| [W20](W20_pha3_td3_k1.md) | 3 | **TD3 K=1** | **3C** |
+| [W21](W21_pha3_td3_k3.md) | 3 | **TD3 K=3** (severity + intra-slice) | **3D** |
 | [W22](W22_sac_k1.md) | 3 | Code SAC (B7, NEW) + **SAC K=1** | **3E** |
 | [W23](W23_sac_k3.md) | 3 | **SAC K=3** + Table I/II compilation (3 solver × K∈{1,3}) | **3F** |
 | [W24](W24_thesis_writing_defense.md) | 3 | Formulation completeness audit + Luận án + defense | 3-FINAL |

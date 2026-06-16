@@ -9,7 +9,7 @@
   - Speed-limit: giữ `maxspeed` tag — ✅ free [`sumo-user.pdf` §edge speed].
   - Background density: `randomTrips` {light/medium/heavy} — 🔴 (ảnh hưởng tắc→tốc độ→SINR); KHÔNG calibrate đếm-xe thật.
   - Tầng 2 OD-synthetic (`od2trips`) = **FUTURE**; Tầng 3 (calibrate số đo thực HN) = **ngoài scope** (declare honest).
-- **M10.2** **Kịch bản MCI hội tụ @ Bạch Mai** (D22): 3 xe đồng trú **1 cell 300m** (gNB @ Bạch Mai, M2.0), hội tụ **BV Bạch Mai** (trauma center). Cửa sổ contention = SCENE(φ₃)+TRANSPORT(φ₄) khi cả 3 trong 300m. 3 xe **severity khác nhau** → triage contention. 🔴 tọa độ/tuyến = minh hoạ (OSM thật). ⚠️ **BỎ** "3 BV khác quận" (mâu thuẫn single-cell→handover). **CLARIFY**: "route trong 300m" CHỈ verify khi SUMO route build xong (B3, mục này); bounce-reflection của RWP code cũ **KHÔNG** phải bằng chứng hợp lệ (RWP BỎ).
+- **M10.2** **Kịch bản MCI hội tụ @ Bạch Mai** (D22): 3 xe đồng trú **1 cell 300m** (gNB @ Bạch Mai, M2.0), hội tụ **BV Bạch Mai** (trauma center). Cửa sổ contention = **toàn bộ episode** khi cả 3 trong 300m (KHÔNG FSM pha — `severity_per_amb` cố định/episode, xe luôn có bệnh nhân, [03](../03_architecture.md)). 3 xe **severity khác nhau** → triage contention. 🔴 tọa độ/tuyến = minh hoạ (OSM thật). ⚠️ **BỎ** "3 BV khác quận" (mâu thuẫn single-cell→handover). **CLARIFY**: "route trong 300m" CHỈ verify khi SUMO route build xong (B3, mục này); bounce-reflection của RWP code cũ **KHÔNG** phải bằng chứng hợp lệ (RWP BỎ).
 - **M10.3** `sumo_mobility.py` đọc FCD; GPS→metric Haversine — ✅[`sumo-user.pdf` §FCD; Haversine well-known]
 - **M10.4** Tích hợp: thay `_advance_ambulance_positions` (RWP) → SUMO trace mặc định; SINR từ vị trí thật (nối M2).
 

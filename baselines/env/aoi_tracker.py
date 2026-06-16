@@ -1,14 +1,13 @@
-"""Age of Information (AoI) tracker per stream type.
+"""Age of Information (AoI) tracker for the per-ambulance aggregated URLLC stream.
 
 Implements:
-    - STREAM_TYPES classification (LCFS+drop for vital aggregated, FCFS for waveforms)
-    - AoI bookkeeping per stream (Kaul et al. 2012)
-    - LCFS-with-drop-old queue for HR/SpO2/BP aggregated
-    - FCFS queue for ECG/EEG/Ultrasound/DENM/CAM
-    - AoI violation rate vs AoI_max^φ thresholds
+    - STREAM_TYPES classification (single LCFS+drop_old aggregated stream)
+    - AoI bookkeeping (Kaul et al. 2012)
+    - LCFS-with-drop-old queue (latest-status semantics: stale reports are
+      superseded by the newest one before delivery)
+    - AoI violation rate vs AoI_max^sev thresholds
 
 Reference:
-    - docs/04_data_flow.md#aoi-stream-classification (lines 172-203)
     - docs/04_data_flow.md AoI formula (lines 150-160)
     - Kaul et al. 2012 (Real-time status: How often should one update?)
 """
@@ -19,32 +18,21 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Literal
 
-from utils.config import PHASE_QOS
+from utils.config import SEVERITY_QOS
 
-StreamId = str  # e.g. "HR_aggregated", "ECG_waveform", "DENM"
+StreamId = str  # e.g. "ambulance_status"
 QueueDiscipline = Literal["LCFS", "FCFS"]
 
 
-# Stream classification per docs/04:194-203
+# Stream classification — single aggregated URLLC status stream per ambulance
+# (periodic bundle, 1 packet/report-cycle; LCFS+drop_old = latest-status semantics).
 STREAM_TYPES: dict[str, dict[str, bool | str]] = {
-    "HR_aggregated":   {"queue": "LCFS", "drop_old": True,  "aoi_aware": True},
-    "SpO2_aggregated": {"queue": "LCFS", "drop_old": True,  "aoi_aware": True},
-    "BP_aggregated":   {"queue": "LCFS", "drop_old": True,  "aoi_aware": True},
-    "Temperature":     {"queue": "LCFS", "drop_old": True,  "aoi_aware": True},
-    "ECG_waveform":    {"queue": "FCFS", "drop_old": False, "aoi_aware": False},
-    "EEG_waveform":    {"queue": "FCFS", "drop_old": False, "aoi_aware": False},
-    "Ultrasound":      {"queue": "FCFS", "drop_old": False, "aoi_aware": False},
-    "DENM":            {"queue": "FCFS", "drop_old": False, "aoi_aware": False},
-    "CAM":             {"queue": "FCFS", "drop_old": False, "aoi_aware": False},
+    "ambulance_status": {"queue": "LCFS", "drop_old": True, "aoi_aware": True},
 }
 
-# AoI thresholds (from PHASE_QOS) — map stream → key into PHASE_QOS
+# AoI threshold (from SEVERITY_QOS) — map stream → key into SEVERITY_QOS
 AOI_THRESHOLD_KEY: dict[str, str] = {
-    "HR_aggregated": "AoI_max_HR",
-    "SpO2_aggregated": "AoI_max_SpO2",
-    "BP_aggregated": "AoI_max_BP",
-    # Temperature reuses HR threshold (slow scalar)
-    "Temperature": "AoI_max_HR",
+    "ambulance_status": "AoI_max",
 }
 
 
@@ -158,12 +146,12 @@ def expected_aoi_mm1(arrival_rate: float, service_rate: float) -> float:
     return (1.0 / service_rate) * (1.0 + rho / (1.0 - rho) + (rho ** 2) / (1.0 - rho ** 2))
 
 
-def aoi_threshold_for_phase(phase_idx: int, stream_id: StreamId) -> float:
-    """Look up AoI_max^φ for a given aggregated-vital stream.
+def aoi_threshold_for_severity(severity: int, stream_id: StreamId) -> float:
+    """Look up AoI_max^sev for a given aggregated-vital stream.
 
     Returns inf for streams without an aggregated AoI threshold (waveforms).
     """
     key = AOI_THRESHOLD_KEY.get(stream_id)
     if key is None:
         return float("inf")
-    return float(PHASE_QOS[phase_idx][key])
+    return float(SEVERITY_QOS[severity][key])

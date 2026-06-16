@@ -14,4 +14,4 @@
 - FSM transitions đúng; AoI stream classification (LCFS) đúng; `pytest tests/test_env_week3.py` pass.
 
 ## Liên kết
-- AoI định nghĩa/ngưỡng ground ref ở [W14](W14_pha1_aoi_traffic.md) (M7, refs **Qi/Chen/Mlika** — KHÔNG Kaul, vắng corpus). Phase QoS → [W13](W13_pha1_delay_reliability_qos.md) (M6). Severity (NACA-S, lớp độc lập với AoI) → [W16](W16_pha1_severity_naca.md).
+- AoI định nghĩa/ngưỡng ground ref ở [W14](W14_pha1_aoi_traffic.md) (M7, refs **Qi/Chen/Mlika** — KHÔNG Kaul, vắng corpus). Phase QoS → [W13](W13_pha1_delay_reliability_qos.md) (M6). Severity (ATS 5-level, lớp độc lập với AoI) → [W16](W16_pha1_severity_triage.md).

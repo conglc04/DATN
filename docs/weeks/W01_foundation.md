@@ -3,8 +3,8 @@
 > **Pha**: GĐ A (code foundation) · **Status**: ✅ DONE · **Gate**: G0 — pytest pass, imports OK
 
 ## Đã xây
-- Cấu trúc package: `env/ agents/ baselines/ experiments/ utils/ data/ tests/ figures/ checkpoints/ logs/`
-- `utils/config.py` — **single source of truth**: `P_TOTAL=273` PRB, `PHASE_QOS`, `LAMBDA_WARM`, `ALPHA_LAMBDA_DUAL=1e-4`, `LAMBDA_MAX=10`, `WORKER_STEPS_PER_MANAGER=10`
+- Cấu trúc package: `env/ agents/ solvers/ experiments/ utils/ data/ tests/ figures/ checkpoints/ logs/`
+- `utils/config.py` — **single source of truth**: `P_TOTAL=273` PRB, `SEVERITY_QOS`, `LAMBDA_WARM`, `ALPHA_LAMBDA_DUAL=1e-4`, `LAMBDA_MAX=10`, `WORKER_STEPS_PER_MANAGER=10`
 - `utils/logger.py` (CSV/TensorBoard), `utils/metrics.py` (D_e2e breakdown, viol_rate, eMBB_tput, AoI)
 - `train.py` (CLI stub), `tests/test_imports.py`, `requirements.txt` (torch≥2.6, numpy≥2.0, gymnasium 0.29)
 

@@ -3,14 +3,15 @@
 Per docs/13_methodology_walkthrough.md (post-critique restructure 2026-05-26):
     Phase 2.1: r = alpha_e(phi) * log1p(R_eMBB / R_REF_EMBB_MBPS)  (eMBB log-utility ONLY)
                URLLC enforced via Lagrangian C1, C2 (LambdaState) — NOT in reward.
-    Phase 2.2: 5 hard constraints c_vec + per-step phase threshold d_phi in info dict
-    Phase 1.1: observation s_t^L = 40-dim formal spec (33 fixed + 3K + F = 33+3+4=40 for K=1, F=4)
+    Phase 2.2: 5 hard constraints c_vec + per-step severity threshold d_phi in info dict
+    Phase 1.1: observation s_t^L = 30-dim spec (24 fixed + 5K + F = 24+5+1=30 for K=1, F=1)
 
-Gate G2.1 acceptance (W05):
-    - obs dim == 40 (K=1, F=4)
+Gate G2.1 acceptance (W05; obs reshaped 2026-06-14 phase→severity 33→31, then
+F=4→F=1 stream consolidation 31→28):
+    - obs dim == 28 (K=1, F=1)
     - reward is single-term eMBB log-utility (no URLLC in reward, no enforce_c3/beta_c3 trace)
     - c_vec shape (5,) + d_phi shape (5,) per step
-    - get_phase_thresholds helper returns Master Table values
+    - get_severity_thresholds helper returns Master Table values
     - info["l_urllc_mean"] available for diagnostics (NOT in reward)
 """
 
@@ -27,8 +28,8 @@ from utils.config import (
     GAMMA_MANAGER,
     GAMMA_WORKER,
     R_REF_EMBB_MBPS,
-    get_phase_alpha,
-    get_phase_thresholds,
+    get_severity_alpha,
+    get_severity_thresholds,
 )
 
 
@@ -59,19 +60,19 @@ def test_three_rate_hierarchy_locked():
     assert cfg.LR_PI_L == 1e-3
 
 
-def test_get_phase_thresholds_phi3():
-    """Phase 3 SCENE thresholds match Master Table exactly."""
-    th = get_phase_thresholds(3)
+def test_get_severity_thresholds_immediate():
+    """Severity 5 IMMEDIATE thresholds (tightest) match Master Table exactly."""
+    th = get_severity_thresholds(5)
     assert th["d1"] == 1e-3       # D_max = 1 ms
     assert th["d2"] == 1e-5       # eps = 1e-5
     assert th["d3"] == 0.0        # C3 threshold; R_min_eMBB is embedded in signed gap
-    assert th["d4"] == 0.1        # AoI_max_HR = 100 ms
+    assert th["d4"] == 0.1        # AoI_max = 100 ms
     assert th["d5"] == 1e-3       # eps_AoI = 1e-3
 
 
-def test_get_phase_thresholds_phi1_relaxed():
-    """Phase 1 STANDBY thresholds (relaxed) match Master Table."""
-    th = get_phase_thresholds(1)
+def test_get_severity_thresholds_nonurgent_relaxed():
+    """Severity 1 NON_URGENT thresholds (relaxed) match Master Table."""
+    th = get_severity_thresholds(1)
     assert th["d1"] == 20e-3
     assert th["d2"] == 1e-3
     assert th["d3"] == 0.0
@@ -79,25 +80,25 @@ def test_get_phase_thresholds_phi1_relaxed():
     assert th["d5"] == 1e-2
 
 
-def test_get_phase_thresholds_invalid_phase():
+def test_get_severity_thresholds_invalid_phase():
     """Phase 0 or 6 must raise ValueError."""
     import pytest
     with pytest.raises(ValueError):
-        get_phase_thresholds(0)
+        get_severity_thresholds(0)
     with pytest.raises(ValueError):
-        get_phase_thresholds(6)
+        get_severity_thresholds(6)
 
 
-def test_get_phase_alpha_sums_to_one():
-    """alpha_U + alpha_e == 1.0 per phase (PHASE_ALPHA invariant)."""
+def test_get_severity_alpha_sums_to_one():
+    """alpha_U + alpha_e == 1.0 per phase (SEVERITY_ALPHA invariant)."""
     for phi in range(1, 6):
-        au, ae = get_phase_alpha(phi)
+        au, ae = get_severity_alpha(phi)
         assert abs(au + ae - 1.0) < 1e-9, f"phase {phi}: alpha sum != 1"
 
 
-def test_get_phase_alpha_phi3_urllc_priority():
-    """Phase 3 SCENE: URLLC heavily prioritized (alpha_U = 0.95)."""
-    au, ae = get_phase_alpha(3)
+def test_get_severity_alpha_immediate_urllc_priority():
+    """Severity 5 IMMEDIATE: URLLC heavily prioritized (alpha_U = 0.95)."""
+    au, ae = get_severity_alpha(5)
     assert au == 0.95
     assert ae == 0.05
 
@@ -107,13 +108,15 @@ def test_get_phase_alpha_phi3_urllc_priority():
 # ----------------------------------------------------------------------------
 
 
-def test_observation_dim_33_with_K1_F4():
-    """Phase 1.2 formal spec: |s_t^L| = 26 + 3K + F = 26 + 3 + 4 = 33 for K=1, F=4
-    (LSTM 6-head + u_MEC removed — B0/B0b)."""
-    env = ORANEnv(config=EnvConfig(K_ambulances=1, num_streams=4), seed=0)
+def test_observation_dim_31_with_K1_F1():
+    """Formal spec: |s_t^L| = 20 + 10K + F = 20 + 10 + 1 = 31 for K=1, F=1
+    (per-ambulance severity_k epic 2026-06-15: fixed 20-dim block +
+    10-dim interleaved per-ambulance block [SINR,d,v,delay_norm,AoI_norm,
+    severity_norm,lambda_C1,lambda_C2,lambda_C4,lambda_C5] + F-dim mean-AoI tail)."""
+    env = ORANEnv(config=EnvConfig(K_ambulances=1, num_streams=1), seed=0)
     obs, _ = env.reset(seed=0)
-    assert obs.shape == (33,), f"Expected (33,), got {obs.shape}"
-    assert env.observation_space.shape == (33,)
+    assert obs.shape == (31,), f"Expected (31,), got {obs.shape}"
+    assert env.observation_space.shape == (31,)
 
 
 def test_observation_finite_no_nan():
@@ -126,13 +129,53 @@ def test_observation_finite_no_nan():
         assert np.all(np.isfinite(obs)), "obs contains NaN/Inf after step"
 
 
-def test_observation_layout_phase_one_hot():
-    """Phase one-hot is at indices [10:15] of fixed 33-dim block."""
-    env = ORANEnv(config=EnvConfig(initial_phase=3), seed=0)
+def test_observation_layout_severity_one_hot():
+    """Severity one-hot is at indices [10:15] of the fixed block."""
+    env = ORANEnv(config=EnvConfig(initial_severity=3), seed=0)
     obs, _ = env.reset(seed=0)
-    phase_oh = obs[10:15]
-    assert phase_oh.sum() == 1.0
-    assert phase_oh[2] == 1.0  # phase 3 (1-indexed) → position 2
+    sev_oh = obs[10:15]
+    assert sev_oh.sum() == 1.0
+    assert sev_oh[2] == 1.0  # severity 3 (1-indexed) → position 2
+
+
+def test_observation_dim_51_with_K3_F1():
+    """K=3, F=1: |s_t^L| = 20 + 10K + F = 20 + 30 + 1 = 51."""
+    env = ORANEnv(config=EnvConfig(K_ambulances=3, num_streams=1), seed=0)
+    obs, _ = env.reset(seed=0)
+    assert obs.shape == (51,), f"Expected (51,), got {obs.shape}"
+    assert env.observation_space.shape == (51,)
+
+
+def test_per_ambulance_delay_norm_differs_under_unequal_sinr():
+    """K=3: ambulances with different SINR get different delay_norm_k/AoI_norm_k,
+    even though they share the same severity — fixing the critical observability
+    gap (2026-06-14) where the policy could not distinguish per-ambulance QoS
+    proximity."""
+    K = 3
+    env = ORANEnv(config=EnvConfig(K_ambulances=K, num_streams=1), seed=0)
+    obs, _ = env.reset(seed=0)
+
+    # Give ambulances very different channel quality, then refresh service rates.
+    env.last_sinr_db = np.array([-5.0, 15.0, 35.0], dtype=np.float64)
+    for k in range(K):
+        env.queues[f"urllc_{k}"].set_arrival_rate(env.config.urllc_arrival_rate)
+    env._update_queue_service_rates()
+
+    d_e2e_per_amb = env._compute_e2e_delay_per_amb()
+    assert d_e2e_per_amb.shape == (K,)
+    assert np.all(np.isfinite(d_e2e_per_amb))
+    # Worse SINR (index 0) ⇒ lower service rate ⇒ higher (or equal) D_e2e.
+    assert d_e2e_per_amb[0] >= d_e2e_per_amb[2]
+    assert len(set(np.round(d_e2e_per_amb, 9))) > 1, "expected differing per-amb delays"
+
+    for _ in range(5):
+        obs, _, _, _, info = env.step(env.action_space.sample())
+
+    assert obs.shape == (51,)
+    assert np.all(np.isfinite(obs))
+    c_vec = info["c_vec"]
+    assert c_vec.shape == (4 * K + 1,)
+    assert np.all(np.isfinite(c_vec))
 
 
 def test_observation_no_duplicate_q_bug():
@@ -142,7 +185,7 @@ def test_observation_no_duplicate_q_bug():
     # arr_urllc at index 7, arr_emBB at index 8
     # rho_urllc at index 0, rho_emBB at index 1 (different signal — utilization)
     # These should be different scales/values when arrival_rate > 0
-    env.queues["urllc"].set_arrival_rate(500.0)
+    env.queues["urllc_0"].set_arrival_rate(500.0)
     env.queues["eMBB"].set_arrival_rate(1000.0)
     obs2 = env._observe()
     # arrival rates normalized: urllc/1e3 = 0.5, eMBB/1e4 = 0.1
@@ -159,9 +202,10 @@ def test_reward_is_embb_log_utility_only():
     """Reward = alpha_e(phi) * log1p(R_eMBB / R_REF_EMBB_MBPS) ONLY (post-critique restructure).
 
     URLLC enforced via Lagrangian C1, C2 in LambdaState — NOT in reward.
-    Reward must be non-negative single-term.
+    Reward must be non-negative single-term. Uses severity 5 (alpha_e=0.05, the
+    most eMBB-deprioritized level) to keep per-step magnitude small.
     """
-    env = ORANEnv(config=EnvConfig(initial_phase=3), seed=0)
+    env = ORANEnv(config=EnvConfig(initial_severity=5), seed=0)
     env.reset(seed=0)
     rewards = []
     for _ in range(10):
@@ -178,31 +222,31 @@ def test_reward_is_embb_log_utility_only():
 
 def test_info_exports_l_urllc_for_diagnostics():
     """L_URLLC remains available in info dict for diagnostics, but is NOT used in reward."""
-    env = ORANEnv(config=EnvConfig(initial_phase=3), seed=0)
+    env = ORANEnv(config=EnvConfig(initial_severity=3), seed=0)
     env.reset(seed=0)
     _, _, _, _, info = env.step(env.action_space.sample())
     assert "l_urllc_mean" in info, "l_urllc_mean must be exported for diagnostics"
     assert info["l_urllc_mean"] >= 0.0, "l_urllc_mean must be non-negative"
 
 
-def test_reward_phi1_higher_than_phi3_due_to_alpha_embb():
-    """Phase 1 has alpha_e=0.7 → reward ~14x larger than phase 3 (alpha_e=0.05) for same R_eMBB.
+def test_reward_nonurgent_higher_than_immediate_due_to_alpha_embb():
+    """NON_URGENT has alpha_e=0.70 vs IMMEDIATE alpha_e=0.05 → larger reward for same R_eMBB.
 
-    Single-term reward r = alpha_e(phi) * log(1 + R/R_REF), so ratio = alpha_e(1)/alpha_e(3) = 14.
+    Single-term reward r = alpha_e(sev) * log(1 + R/R_REF); severity does not change
+    channel/traffic dynamics, so R_eMBB is identical and the ratio is alpha_e(1)/alpha_e(5)=14.
     """
-    env1 = ORANEnv(config=EnvConfig(initial_phase=1), seed=0)
+    env1 = ORANEnv(config=EnvConfig(initial_severity=1), seed=0)
     env1.reset(seed=0)
     r1_total = sum(env1.step(env1.action_space.sample())[1] for _ in range(20))
 
-    env3 = ORANEnv(config=EnvConfig(initial_phase=3), seed=0)
-    env3.reset(seed=0)
-    r3_total = sum(env3.step(env3.action_space.sample())[1] for _ in range(20))
+    env5 = ORANEnv(config=EnvConfig(initial_severity=5), seed=0)
+    env5.reset(seed=0)
+    r5_total = sum(env5.step(env5.action_space.sample())[1] for _ in range(20))
 
-    # Phase 1 (alpha_e=0.7) should yield strictly larger cumulative reward than phase 3 (alpha_e=0.05)
-    # under similar eMBB throughput conditions. Soft check (random actions may vary throughput).
-    assert r1_total >= r3_total, (
-        f"Phase 1 (alpha_e=0.7) cumulative reward {r1_total} should be >= "
-        f"phase 3 (alpha_e=0.05) cumulative reward {r3_total}"
+    # NON_URGENT (alpha_e=0.70) cumulative reward must exceed IMMEDIATE (alpha_e=0.05).
+    assert r1_total >= r5_total, (
+        f"NON_URGENT (alpha_e=0.70) reward {r1_total} should be >= "
+        f"IMMEDIATE (alpha_e=0.05) reward {r5_total}"
     )
 
 
@@ -228,7 +272,7 @@ def test_info_exports_queue_diag_for_pk_audit():
     with E[S²] = σ_S² + (E[S])² and σ_S² = 1/μ² + d_stoch² (Exponential + retx).
     See docs/13 §1.3 + docs/04 §Queue Model.
     """
-    env = ORANEnv(config=EnvConfig(initial_phase=3), seed=0)
+    env = ORANEnv(config=EnvConfig(initial_severity=3), seed=0)
     env.reset(seed=0)
     _, _, _, _, info = env.step(env.action_space.sample())
     for key in ("queue_diag_urllc", "queue_diag_embb"):
@@ -256,37 +300,40 @@ def test_info_has_d_phi_shape_5():
     assert info["d_phi"].shape == (5,), f"d_phi shape {info['d_phi'].shape} != (5,)"
 
 
-def test_info_d_phi_matches_master_table_phi3():
-    """d_phi at phase 3 must match Master Table values exactly."""
-    env = ORANEnv(config=EnvConfig(initial_phase=3), seed=0)
+def test_info_d_phi_matches_master_table_immediate():
+    """d_phi at severity 5 IMMEDIATE must match Master Table values exactly.
+
+    (4K+1)-dim layout [d1_C1, d2_C2, d4_C4, d5_C5, d3_C3_shared] (K=1) — the
+    permutation [0,1,3,4,2] of the legacy [d1,d2,d3,d4,d5] order."""
+    env = ORANEnv(config=EnvConfig(initial_severity=5), seed=0)
     env.reset(seed=0)
     _, _, _, _, info = env.step(env.action_space.sample())
     d_phi = info["d_phi"]
-    expected = [1e-3, 1e-5, 0.0, 0.1, 1e-3]  # d1..d5 at phase 3
+    expected = [1e-3, 1e-5, 0.1, 1e-3, 0.0]  # d1,d2,d4,d5,d3 at severity 5
     for j, exp in enumerate(expected):
         assert abs(float(d_phi[j]) - exp) < 1e-6, (
-            f"d_phi[{j}] = {d_phi[j]} != expected {exp} at phase 3"
+            f"d_phi[{j}] = {d_phi[j]} != expected {exp} at severity 5"
         )
 
 
-def test_info_d_phi_changes_with_phase():
-    """d_phi[0] (D_max) must change when phase changes (1ms@phi_3 vs 20ms@phi_1)."""
-    env3 = ORANEnv(config=EnvConfig(initial_phase=3), seed=0)
-    env3.reset(seed=0)
-    _, _, _, _, info3 = env3.step(env3.action_space.sample())
+def test_info_d_phi_changes_with_severity():
+    """d_phi[0] (D_max) differs across severity (1ms@IMMEDIATE vs 20ms@NON_URGENT)."""
+    env5 = ORANEnv(config=EnvConfig(initial_severity=5), seed=0)
+    env5.reset(seed=0)
+    _, _, _, _, info5 = env5.step(env5.action_space.sample())
 
-    env1 = ORANEnv(config=EnvConfig(initial_phase=1), seed=0)
+    env1 = ORANEnv(config=EnvConfig(initial_severity=1), seed=0)
     env1.reset(seed=0)
     _, _, _, _, info1 = env1.step(env1.action_space.sample())
 
-    assert info3["d_phi"][0] == 1e-3
+    assert info5["d_phi"][0] == 1e-3
     assert info1["d_phi"][0] == 20e-3
-    assert info3["d_phi"][0] != info1["d_phi"][0]
+    assert info5["d_phi"][0] != info1["d_phi"][0]
 
 
 def test_c_vec_aggregates_20_mac_ticks():
     """c_vec is mean across 20 MAC ticks per Worker step (Phase 1.4 ratio)."""
-    env = ORANEnv(config=EnvConfig(initial_phase=3), seed=0)
+    env = ORANEnv(config=EnvConfig(initial_severity=3), seed=0)
     env.reset(seed=0)
     _, _, _, _, info = env.step(env.action_space.sample())
     # Worker step counter should reflect 20 ticks
@@ -294,27 +341,29 @@ def test_c_vec_aggregates_20_mac_ticks():
 
 
 def test_c_vec_c3_signed_gap_finite():
-    """c_vec[2] is signed R_min - R_eMBB, so surplus throughput may make it negative."""
-    env = ORANEnv(config=EnvConfig(initial_phase=3), seed=0)
+    """c_vec[4] (C3_shared, last slot at K=1) is signed R_min - R_eMBB, so surplus
+    throughput may make it negative."""
+    env = ORANEnv(config=EnvConfig(initial_severity=3), seed=0)
     env.reset(seed=0)
     for _ in range(5):
         _, _, _, _, info = env.step(env.action_space.sample())
-        assert np.isfinite(info["c_vec"][2]), f"c_vec[2] = {info['c_vec'][2]} should be finite"
+        assert np.isfinite(info["c_vec"][4]), f"c_vec[4] = {info['c_vec'][4]} should be finite"
 
 
 def test_c_vec_c2_c5_indicator_in_unit_interval():
-    """c_vec[1] (URLLC tail viol) and c_vec[4] (AoI tail viol) are fractions ∈ [0, 1]."""
+    """c_vec[1] (C2, URLLC tail viol) and c_vec[3] (C5, AoI tail viol) are fractions ∈ [0, 1]."""
     env = ORANEnv(seed=0)
     env.reset(seed=0)
     for _ in range(5):
         _, _, _, _, info = env.step(env.action_space.sample())
         assert 0.0 <= info["c_vec"][1] <= 1.0, f"c_vec[1] = {info['c_vec'][1]} should be in [0, 1]"
-        assert 0.0 <= info["c_vec"][4] <= 1.0, f"c_vec[4] = {info['c_vec'][4]} should be in [0, 1]"
+        assert 0.0 <= info["c_vec"][3] <= 1.0, f"c_vec[3] = {info['c_vec'][3]} should be in [0, 1]"
 
 
-def test_info_phase_now_alias():
-    """info['phase_now'] is alias for info['phase'] (docs/13 naming convention)."""
-    env = ORANEnv(seed=0)
+def test_info_exports_severity():
+    """info exports the exogenous severity (1..5) + its name (phase→severity swap)."""
+    env = ORANEnv(config=EnvConfig(initial_severity=4), seed=0)
     env.reset(seed=0)
     _, _, _, _, info = env.step(env.action_space.sample())
-    assert info["phase_now"] == info["phase"]
+    assert info["severity"] == 4
+    assert info["severity_name"] == "EMERGENCY"

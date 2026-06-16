@@ -11,4 +11,4 @@
 - → Solver chạy LẠI TỪ ĐẦU trên **SUMO** = sweep W18–W23 (KHÔNG cite số RWP cũ).
 
 ## Liên kết
-- Thay thế bởi E1 SUMO → [W19](W19_pha3_e1_baseline_sumo.md). Lý do bỏ RWP → master plan D8/D20, `docs/10_risks.md`.
+- Thay thế bởi PPO K=3 (SUMO) → [W19](W19_pha3_ppo_k3.md). Lý do bỏ RWP → master plan D8/D20, `docs/10_risks.md`.

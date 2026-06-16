@@ -1,11 +1,11 @@
-"""Ablation variant — PPO minus phase ("w/o Phase" in Table II).
+"""Ablation variant — PPO minus severity ("w/o severity" in Table II).
 
 Compared to PPO full:
-    Phase     ✗ (one-hot zeroed out — agent does not know which phase)
+    Severity  ✗ (one-hot zeroed out — agent does not know patient urgency)
     HRL       ✓ (conceptual; Manager hint preserved)
     CMDP      ✓ (full 5-dim Lagrangian)
 
-Used to isolate the value of explicit phase signaling.
+Used to isolate the value of explicit severity signaling.
 Reference: docs/06_validation.md ablation Table.
 """
 
@@ -14,7 +14,7 @@ from __future__ import annotations
 import numpy as np
 
 from agents.ppo_agent import PPOAgent
-from solvers._common import BaselineFlags, CMDPLagrangian, mask_phase
+from solvers._common import BaselineFlags, CMDPLagrangian, mask_severity
 
 
 class NoPhasePPOBaseline:
@@ -31,7 +31,7 @@ class NoPhasePPOBaseline:
         self.lagrangian = CMDPLagrangian(n=5, alpha=alpha_lambda)
 
     def maybe_mask(self, obs):
-        return mask_phase(obs)
+        return mask_severity(obs)
 
     def select_action(self, obs, deterministic: bool = False):
         return self.ppo.select_action(self.maybe_mask(obs), deterministic=deterministic)

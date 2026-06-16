@@ -5,6 +5,11 @@ Verifies (per docs/weeks/W08 Gate G3.2):
     - LambdaState integration (λ_global non-trivial after dual ascent)
     - Phase transition syncs both λ_global + λ_local (Fix Error 1)
     - PPO buffer boundary = 1 episode (Phase 3.4.4 N8)
+
+Per-ambulance severity_k epic (2026-06-15): obs is now 20+10K+F-dim (31 at
+K=1, F=1), λ vectors are (4K+1)-dim in NEW order
+[C1_0..C1_{K-1}, C2_0..C2_{K-1}, C4_0..C4_{K-1}, C5_0..C5_{K-1}, C3_shared],
+and overlay_lambda_local scatters into non-contiguous per-amb obs slots.
 """
 
 from __future__ import annotations
@@ -20,7 +25,17 @@ from train import (
     overlay_lambda_local,
     train_ppo,
 )
-from utils.config import LAMBDA_LOCAL_OBS_INDEX
+from utils.config import (
+    AMB_LAMBDA_C1_OFFSET,
+    AMB_LAMBDA_C2_OFFSET,
+    AMB_LAMBDA_C4_OFFSET,
+    AMB_LAMBDA_C5_OFFSET,
+    LAMBDA_C3_SHARED_OBS_INDEX,
+    OBS_FIXED_BLOCK_LEN,
+    SEVERITY_OH_OBS_INDEX,
+)
+
+OBS_DIM_K1 = 31  # 20 + 10*1 + 1 (F=1)
 
 
 # ============================================================
@@ -29,57 +44,82 @@ from utils.config import LAMBDA_LOCAL_OBS_INDEX
 
 
 def test_build_manager_state_shape():
-    obs = np.zeros(33, dtype=np.float32)
-    lam = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float64)
+    obs = np.zeros(OBS_DIM_K1, dtype=np.float32)
+    lam = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float64)  # (4*1+1,)
     s_H = build_manager_state(obs, lam)
-    assert s_H.shape == (11,)
+    assert s_H.shape == (11,)  # 6 + (4K+1) = 6+5 at K=1
     assert s_H.dtype == np.float32
 
 
 def test_build_manager_state_includes_lambda():
-    obs = np.zeros(33, dtype=np.float32)
+    obs = np.zeros(OBS_DIM_K1, dtype=np.float32)
     lam = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float64)
     s_H = build_manager_state(obs, lam)
-    # λ_global occupies tail 5 slots
+    # λ_global occupies tail (4K+1)=5 slots
     np.testing.assert_array_almost_equal(s_H[-5:], lam, decimal=5)
 
 
 def test_build_manager_state_phase_normalized():
-    """Phase index encoded as (argmax+1)/5 from one-hot block."""
-    obs = np.zeros(33, dtype=np.float32)
-    obs[10 + 2] = 1.0  # phase φ_3 (one-hot at index 12)
+    """severity_ref index encoded as (argmax+1)/5 from one-hot block at SEVERITY_OH_OBS_INDEX."""
+    obs = np.zeros(OBS_DIM_K1, dtype=np.float32)
+    obs[SEVERITY_OH_OBS_INDEX + 2] = 1.0  # severity_ref = 3 (one-hot index 2)
     lam = np.zeros(5)
     s_H = build_manager_state(obs, lam)
     assert s_H[3] == pytest.approx(3 / 5)
 
 
 # ============================================================
-# λ_local overlay (Phase 3.4.4 N4)
+# λ_local overlay (Phase 3.4.4 N4) — non-contiguous per-amb scatter
 # ============================================================
 
 
-def test_overlay_lambda_local_replaces_block():
-    obs = np.arange(33, dtype=np.float32)
-    lam = np.array([0.1, 0.2, 0.3, 0.4, 0.5], dtype=np.float64)
-    out = overlay_lambda_local(obs, lam)
-    np.testing.assert_array_almost_equal(
-        out[LAMBDA_LOCAL_OBS_INDEX : LAMBDA_LOCAL_OBS_INDEX + 5],
-        lam.astype(np.float32),
-        decimal=6,
-    )
-    # Other indices unchanged
-    np.testing.assert_array_equal(out[:LAMBDA_LOCAL_OBS_INDEX], obs[:LAMBDA_LOCAL_OBS_INDEX])
-    np.testing.assert_array_equal(
-        out[LAMBDA_LOCAL_OBS_INDEX + 5 :], obs[LAMBDA_LOCAL_OBS_INDEX + 5 :]
-    )
+def test_overlay_lambda_local_replaces_slots_k1():
+    obs = np.arange(OBS_DIM_K1, dtype=np.float32)
+    lam = np.array([0.1, 0.2, 0.3, 0.4, 0.5], dtype=np.float64)  # [C1_0,C2_0,C4_0,C5_0,C3_shared]
+    out = overlay_lambda_local(obs, lam, K=1)
+
+    base = OBS_FIXED_BLOCK_LEN  # + 10*0
+    assert out[base + AMB_LAMBDA_C1_OFFSET] == pytest.approx(lam[0])
+    assert out[base + AMB_LAMBDA_C2_OFFSET] == pytest.approx(lam[1])
+    assert out[base + AMB_LAMBDA_C4_OFFSET] == pytest.approx(lam[2])
+    assert out[base + AMB_LAMBDA_C5_OFFSET] == pytest.approx(lam[3])
+    assert out[LAMBDA_C3_SHARED_OBS_INDEX] == pytest.approx(lam[4])
+
+    # Untouched indices unchanged
+    touched = {
+        base + AMB_LAMBDA_C1_OFFSET,
+        base + AMB_LAMBDA_C2_OFFSET,
+        base + AMB_LAMBDA_C4_OFFSET,
+        base + AMB_LAMBDA_C5_OFFSET,
+        LAMBDA_C3_SHARED_OBS_INDEX,
+    }
+    for i in range(OBS_DIM_K1):
+        if i not in touched:
+            assert out[i] == obs[i]
 
 
 def test_overlay_lambda_local_does_not_mutate_input():
-    obs = np.arange(33, dtype=np.float32)
+    obs = np.arange(OBS_DIM_K1, dtype=np.float32)
     obs_orig = obs.copy()
     lam = np.ones(5)
-    _ = overlay_lambda_local(obs, lam)
+    _ = overlay_lambda_local(obs, lam, K=1)
     np.testing.assert_array_equal(obs, obs_orig)
+
+
+def test_overlay_lambda_local_k3_per_amb_slots():
+    K = 3
+    obs_dim = 20 + 10 * K + 1
+    obs = np.arange(obs_dim, dtype=np.float32)
+    lam = np.arange(4 * K + 1, dtype=np.float64) / 10.0  # distinct values
+    out = overlay_lambda_local(obs, lam, K=K)
+
+    for k in range(K):
+        base = OBS_FIXED_BLOCK_LEN + 10 * k
+        assert out[base + AMB_LAMBDA_C1_OFFSET] == pytest.approx(lam[k])
+        assert out[base + AMB_LAMBDA_C2_OFFSET] == pytest.approx(lam[K + k])
+        assert out[base + AMB_LAMBDA_C4_OFFSET] == pytest.approx(lam[2 * K + k])
+        assert out[base + AMB_LAMBDA_C5_OFFSET] == pytest.approx(lam[3 * K + k])
+    assert out[LAMBDA_C3_SHARED_OBS_INDEX] == pytest.approx(lam[4 * K])
 
 
 # ============================================================
@@ -89,19 +129,19 @@ def test_overlay_lambda_local_does_not_mutate_input():
 
 def test_phase_transition_syncs_both_lambdas():
     """LambdaState.on_manager_step_start must sync BOTH λ_global + λ_local
-    from λ_warm[phi_now] on phase transition."""
+    from λ_warm[severity] on severity transition."""
     ls = LambdaState()
-    ls.reset_episode(initial_phase=1)
+    ls.reset_episode((1,), 1)
     lam_before_g = ls.get_lambda_global()
     lam_before_l = ls.get_lambda_local()
     np.testing.assert_array_equal(lam_before_g, lam_before_l)
 
-    # Transition φ_1 → φ_3
-    ls.on_manager_step_start(phi_now=3)
+    # Transition severity (1,) -> (3,)
+    ls.on_manager_step_start((3,), 3)
     lam_after_g = ls.get_lambda_global()
     lam_after_l = ls.get_lambda_local()
     np.testing.assert_array_equal(lam_after_g, lam_after_l)
-    # And both should differ from φ_1 warm (LAMBDA_WARM[1] ≠ LAMBDA_WARM[3])
+    # And both should differ from severity-1 warm (LAMBDA_WARM[1] ≠ LAMBDA_WARM[3])
     assert not np.allclose(lam_after_g, lam_before_g)
 
 
@@ -132,16 +172,16 @@ def test_5_episode_smoke_no_nan(tmp_path):
         hard_mission=False,
     )
     assert isinstance(out, dict)
-    # Required keys present
+    # Required keys present (K=1: C1_0/C2_0/C4_0/C5_0 + shared C3)
     for k in [
         "ep_reward",
         "mean_e2e_ms",
         "viol_rate",
-        "lambda_global_1",
-        "lambda_global_2",
-        "lambda_global_3",
-        "lambda_global_4",
-        "lambda_global_5",
+        "lambda_global_C1_0",
+        "lambda_global_C2_0",
+        "lambda_global_C4_0",
+        "lambda_global_C5_0",
+        "lambda_global_C3_shared",
     ]:
         assert k in out, f"Missing key: {k}"
         if isinstance(out[k], (int, float)):
@@ -150,7 +190,7 @@ def test_5_episode_smoke_no_nan(tmp_path):
 
 @pytest.mark.slow
 def test_5_episode_lambda_global_non_trivial(tmp_path):
-    """After 5 episodes with non-zero constraint signals, at least one λ_j > 0."""
+    """After 5 episodes with non-zero constraint signals, λ_global is finite and ≥ 0."""
     out = train_ppo(
         n_episodes=5,
         seed=0,
@@ -158,7 +198,15 @@ def test_5_episode_lambda_global_non_trivial(tmp_path):
         print_every=10_000,
         checkpoint_every=0,
     )
-    lam_vec = np.array([out[f"lambda_global_{j + 1}"] for j in range(5)])
+    lam_vec = np.array(
+        [
+            out["lambda_global_C1_0"],
+            out["lambda_global_C2_0"],
+            out["lambda_global_C4_0"],
+            out["lambda_global_C5_0"],
+            out["lambda_global_C3_shared"],
+        ]
+    )
     # All λ_j ≥ 0 (projection invariant)
     assert (lam_vec >= 0).all()
 

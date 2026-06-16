@@ -1,7 +1,7 @@
-"""Ablation variant — Phase-aware flat PPO, NO CMDP ("w/o CMDP" in Table II).
+"""Ablation variant — Severity-aware flat PPO, NO CMDP ("w/o CMDP" in Table II).
 
 Compared to PPO full:
-    Phase     ✓ (one-hot visible in obs)
+    Severity  ✓ (one-hot visible in obs)
     HRL       ✗ (flat single-level)
     CMDP      ✗ (no Lagrangian, soft penalty only)
     Safety QP ✗

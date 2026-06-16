@@ -10,7 +10,7 @@
 | R4 | **ε=1e-5 rare-event**: 10 seeds KHÔNG validate được | 🔴 | Rule-of-three `ε≤3/N`; KHÔNG claim 1e-5 empirical; IS/EVT future |
 | R5 | **SUMO fidelity**: chỉ Tầng 1 (signals+speed-limit) + density sweep | 🔴 | Declare honest: KHÔNG calibrate số đo thực HN; OD-synthetic/timing-đèn-thật = future/out-of-scope |
 | R6 | **severity→priority** không có ref y khoa trực tiếp | 🔴 | Design principle declared (triage analogy NEWS2/RTS) |
-| R7 | **κ, γ_max/β_max, ρ, λ_det/λ_stab, D_stoch, s_C6, m, δ_tail** = tham số chưa có ref | 🔴 | Sensitivity sweep declared (đã nêu dải mỗi cái ở Reference Ledger) |
+| R7 | **κ, γ_max/β_max, ρ, λ_det/λ_stab, D_stoch, s_C6, m, ε_AoI** = tham số chưa có ref | 🔴 | Sensitivity sweep declared (đã nêu dải mỗi cái ở Reference Ledger) |
 | R8 | **Compute**: K=3 ×10+ seeds × sweep W18–W23 (3 solver × K∈{1,3}; E3/E4 → future work, D26) | 🟡 | 10 seeds tối thiểu; tăng nếu CI rộng; pre-register |
 | R9 | **Novelty Related Work**: nếu paper khác đã làm intra-slice user-differentiation | 🟡 | Verify trực tiếp từng paper (PHẦN 10); hedge "to best of our knowledge" |
 

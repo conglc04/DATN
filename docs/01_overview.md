@@ -12,8 +12,7 @@ Tại Hà Nội (mật độ giao thông cao), **đa xe cứu thương** cùng t
 
 ## Giải pháp — Khung CMDP + 3 solver ngang hàng
 **Đóng góp = BÀI TOÁN tối ưu (khung CHUNG, KHÔNG gắn với 1 thuật toán)**. Các thành phần dựng nên bài toán:
-- **Phase-aware**: 5 pha vận hành (Standby→Dispatch→Scene→Transport→Return), QoS khác nhau/pha; phase từ **explicit signaling**, KHÔNG ML.
-- **Severity-aware (MỚI)**: NACA-S 6 mức (exogenous, event-driven, **KHÔNG vitals giả**) → intra-slice priority weight + ordering.
+- **Severity-aware (trục ưu tiên chính)**: 5 mức **ATS — Australasian Triage Scale** (Non-urgent→Immediate; exogenous, **cố định/episode**, **KHÔNG vitals giả**) → chọn ngưỡng QoS (`SEVERITY_QOS`) + reward weight `α_e(sev)` + intra-slice priority/ordering (K≥2). Thay 5-pha cũ (xe luôn có bệnh nhân ⟹ pha vô nghĩa). Scene/transport (mobility) đã có trong `speed` obs.
 - **CMDP-Lagrangian**: constraint qua dual ascent (`λ←clip(λ+α·g,0,Λ_max)`), KHÔNG soft penalty trong reward.
 - **Two-timescale rApp/xApp**: điều phối Non-RT (~1s) / Near-RT (~10ms) — khung thời gian chung. (PPO khai thác bằng Manager+Worker riêng; TD3/SAC giải flat off-policy — khác biệt về solver, KHÔNG về bài toán.)
 - **Structural safety**: closed-form feasibility projection (Option B floor + ordering by construction) — KHÔNG cần NN/QP.
@@ -21,7 +20,7 @@ Tại Hà Nội (mật độ giao thông cao), **đa xe cứu thương** cùng t
 **3 method RL NGANG HÀNG giải cùng bài toán này** (KHÔNG đề cao thuật toán nào): **PPO** (on-policy), **TD3** (off-policy, deterministic), **SAC** (off-policy, max-entropy) → so sánh công bằng ở Table I/II.
 
 ## Đóng góp (3 build-thật + 1 headline novel)
-1. **★ C1 — Context-aware constraints (phase + severity)**: Phase = ngữ cảnh nhiệm vụ (✅ built); **Severity = ngữ cảnh bệnh nhân (NACA-S → intra-slice priority + ordering, NOVEL)** — lấp gap "no user-criticality TRONG slice".
+1. **★ C1 — Context-aware constraints (severity)**: **Severity = ngữ cảnh bệnh nhân (ATS 5-level → chọn QoS tier + intra-slice priority + ordering, NOVEL)** — lấp gap "no user-criticality TRONG slice".
 2. **C2 — CMDP-Lagrangian HRL → RRMPolicyRatio** (✅ built+tested): rApp/xApp → chuẩn 3GPP RRMPolicy{Min/Max/Dedicated}Ratio.
 3. **C3 — AoI hard constraints** (✅ built+tested): freshest-data priority (C4/C5) thay latency thuần.
 4. *Feasibility projection* (honest, **KHÔNG claim novel** như Kim 2026).

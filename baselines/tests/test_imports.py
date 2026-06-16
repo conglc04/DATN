@@ -38,14 +38,17 @@ def test_phase_qos_table():
     """Phase QoS table must have all 5 phases with the right tightest budgets."""
     from utils import config as cfg
 
-    assert set(cfg.PHASE_QOS.keys()) == {1, 2, 3, 4, 5}
-    # φ₃ SCENE is tightest
-    assert cfg.PHASE_QOS[3]["D_max"] == 1e-3
-    assert cfg.PHASE_QOS[3]["eps"] == 1e-5
-    assert cfg.PHASE_QOS[3]["AoI_max_HR"] == 0.1
-    # φ₁/φ₅ relaxed
-    assert cfg.PHASE_QOS[1]["D_max"] == 20e-3
-    assert cfg.PHASE_QOS[5]["D_max"] == 20e-3
+    assert set(cfg.SEVERITY_QOS.keys()) == {1, 2, 3, 4, 5}
+    # severity 5 IMMEDIATE is tightest
+    assert cfg.SEVERITY_QOS[5]["D_max"] == 1e-3
+    assert cfg.SEVERITY_QOS[5]["eps"] == 1e-5
+    assert cfg.SEVERITY_QOS[5]["AoI_max"] == 0.1
+    # severity 1 NON_URGENT is loosest; monotonic tightening 1→5
+    assert cfg.SEVERITY_QOS[1]["D_max"] == 20e-3
+    assert cfg.SEVERITY_QOS[1]["D_max"] > cfg.SEVERITY_QOS[5]["D_max"]
+    assert all(
+        cfg.SEVERITY_QOS[s]["D_max"] >= cfg.SEVERITY_QOS[s + 1]["D_max"] for s in (1, 2, 3, 4)
+    )
 
 
 def test_cmdp_thresholds():
@@ -53,18 +56,21 @@ def test_cmdp_thresholds():
     from utils import config as cfg
 
     required_keys = {"d1_lat_mean", "d2_lat_tail", "d3_embb_mbps", "d4_aoi_mean", "d5_aoi_tail"}
-    for phase, thresholds in cfg.CMDP_D_J_PHI.items():
+    for phase, thresholds in cfg.CMDP_D_J_SEVERITY.items():
         assert required_keys.issubset(thresholds.keys()), (
             f"Phase {phase} missing keys: {required_keys - set(thresholds.keys())}"
         )
 
 
 def test_lambda_warm():
-    """λ_warm post-training values for φ₃ must match docs/05_agent_workflow.md:178."""
+    """λ_warm warm-start for severity 5 IMMEDIATE (tightest) matches docs/05."""
     from utils import config as cfg
 
-    expected_phi3 = [1.80, 2.20, 0.10, 1.50, 2.00]
-    assert cfg.LAMBDA_WARM[3] == expected_phi3, f"λ_warm[φ₃] mismatch: {cfg.LAMBDA_WARM[3]}"
+    expected_immediate = [1.80, 2.20, 0.10, 1.50, 2.00]
+    assert cfg.LAMBDA_WARM[5] == expected_immediate, f"λ_warm[IMMEDIATE] mismatch: {cfg.LAMBDA_WARM[5]}"
+    # Monotonic: λ grows with severity (mean over the 5 constraints)
+    means = [sum(cfg.LAMBDA_WARM[s]) for s in (1, 2, 3, 4, 5)]
+    assert means == sorted(means), f"λ_warm not monotonic in severity: {means}"
 
 
 def test_rl_hyperparams():
@@ -102,25 +108,25 @@ def test_phase2_constants_w05():
 
 
 def test_master_table_helper():
-    """get_phase_thresholds() returns 5-key dict matching Master Table."""
-    from utils.config import get_phase_thresholds, get_phase_alpha
+    """get_severity_thresholds() returns 5-key dict matching Master Table."""
+    from utils.config import get_severity_thresholds, get_severity_alpha
 
-    # Phase 3 SCENE — tightest constraints
-    th = get_phase_thresholds(3)
+    # Severity 5 IMMEDIATE — tightest constraints
+    th = get_severity_thresholds(5)
     assert set(th.keys()) == {"d1", "d2", "d3", "d4", "d5"}
     assert th["d1"] == 1e-3       # D_max
     assert th["d2"] == 1e-5       # eps tail
-    assert th["d3"] == 0.0        # C3 threshold; R_min eMBB is in CMDP_D_J_PHI
+    assert th["d3"] == 0.0        # C3 threshold; R_min eMBB is in CMDP_D_J_SEVERITY
     assert th["d4"] == 0.1        # AoI_max HR
     assert th["d5"] == 1e-3       # eps AoI tail
 
-    # Phase 1 STANDBY — relaxed
-    th1 = get_phase_thresholds(1)
+    # Severity 1 NON_URGENT — relaxed
+    th1 = get_severity_thresholds(1)
     assert th1["d1"] == 20e-3
     assert th1["d3"] == 0.0
 
-    # alpha helper
-    au, ae = get_phase_alpha(3)
+    # alpha helper (IMMEDIATE → eMBB heavily deprioritized)
+    au, ae = get_severity_alpha(5)
     assert au == 0.95 and ae == 0.05
     assert abs(au + ae - 1.0) < 1e-9
 

@@ -2,9 +2,9 @@
 
 Strict pipeline (docs/13_methodology_walkthrough.md Phase 3.4.1):
     Outer FOR ep:
-        s = env.reset(); LambdaState.reset_episode(env.phase)
+        s = env.reset(); LambdaState.reset_episode(info["severity"])
         Manager FOR k in [0..M-1]:
-            LambdaState.on_manager_step_start(env.phase)          # Fix Error 1
+            LambdaState.on_manager_step_start(info["severity"])    # no-op (severity fixed)
             s_H = build_manager_state(...); a_H = manager.act(s_H)
             For Worker FOR t in [0..W-1]:
                 s_L = env.observe() with λ_local overlay
@@ -21,12 +21,12 @@ Strict pipeline (docs/13_methodology_walkthrough.md Phase 3.4.1):
 
 Implementation notes (Phase 3.4.4 N1–N9):
     N1  γ_H = γ_L^W ≈ 0.904          (sourced from utils.config.GAMMA_MANAGER)
-    N3  Per-step phase threshold d_j^φ_t lookup from env.info["d_phi"]
-    N4  λ_local exposed in Worker obs at indices [17:22] (already part of env._observe)
+    N3  Per-step severity threshold d_j^sev lookup from env.info["d_phi"]
+    N4  λ_local exposed in Worker obs at indices [15:20] (already part of env._observe)
     N5  win_c reset after each Manager step (Option b)
     N7  Dual update order: aggregate → mean → project → push → reset
     N8  PPO buffer boundary = 1 episode
-    N9  Phase transition handled in LambdaState.on_manager_step_start (sync BOTH)
+    N9  Severity sync handled in LambdaState.on_manager_step_start (sync BOTH)
 
 Usage:
     python train.py --algo ppo --episodes 5 --seed 0 --hard
@@ -46,19 +46,22 @@ import numpy as np
 from agents.lagrangian import LambdaState
 from agents.manager_agent import (
     MANAGER_ACTION_DIM_DEFAULT,
-    MANAGER_STATE_DIM_DEFAULT,
     ManagerAgent,
+    decode_manager_action,
+    manager_state_dim,
 )
 from agents.ppo_agent import RolloutBuffer
-from agents.worker_agent import WORKER_STATE_DIM_DEFAULT, WorkerAgent
+from agents.worker_agent import WorkerAgent
 from env.oran_env import EnvConfig, ORANEnv, hard_mission_config
+from solvers._common import build_manager_state
 from utils.config import (
-    LAMBDA_LOCAL_OBS_INDEX,
-    PHASE_OH_OBS_INDEX,
+    GAMMA,
+    SEVERITY_OH_OBS_INDEX,
     WORKER_STEPS_PER_MANAGER,
 )
 from utils.early_stopping import EarlyStopping
 from utils.logger import Logger
+from utils.obs import overlay_lambda_local  # single-source λ overlay (used by all solvers)
 
 
 # ============================================================
@@ -70,49 +73,11 @@ WORKER_STEPS_PER_EPISODE: int = MANAGER_STEPS_PER_EPISODE * WORKER_STEPS_PER_MAN
 
 
 # ============================================================
-# Manager state construction
-# ============================================================
-
-
-def build_manager_state(
-    worker_obs: np.ndarray,
-    lambda_global: np.ndarray,
-) -> np.ndarray:
-    """Construct 11-dim Manager state s_H from current Worker obs + λ_global.
-
-    Layout (Phase 3.3.1 W08 placeholder — finalize multi-cell aggregation in W11+):
-        [0:2]   ρ_urllc, ρ_eMBB              (from worker [0:2])
-        [2]     mean BLER                    (from worker [9])
-        [3]     phase index (normalized)     (argmax worker [10:15] / 5)
-        [4:6]   aoi mean, aoi max            (from worker [24:26])
-        [6:11]  λ_global per-constraint (5)  (from LambdaState)
-    """
-    rho_urllc = float(worker_obs[0])
-    rho_emBB = float(worker_obs[1])
-    bler = float(worker_obs[9])
-    phase_oh = worker_obs[PHASE_OH_OBS_INDEX : PHASE_OH_OBS_INDEX + 5]
-    phase_idx = float((np.argmax(phase_oh) + 1) / 5.0)
-    aoi_mean = float(worker_obs[24])
-    aoi_max = float(worker_obs[25])
-    s_H = np.concatenate(
-        [
-            np.array([rho_urllc, rho_emBB, bler, phase_idx, aoi_mean, aoi_max], dtype=np.float32),
-            np.asarray(lambda_global, dtype=np.float32),
-        ]
-    )
-    return s_H.astype(np.float32)
-
-
-# ============================================================
 # Worker observation overlay (Phase 3.4.4 N4)
 # ============================================================
-
-
-def overlay_lambda_local(obs: np.ndarray, lambda_local: np.ndarray) -> np.ndarray:
-    """Overwrite worker obs[17:22] with current λ_local (5-dim)."""
-    out = obs.astype(np.float32, copy=True)
-    out[LAMBDA_LOCAL_OBS_INDEX : LAMBDA_LOCAL_OBS_INDEX + 5] = lambda_local.astype(np.float32)
-    return out
+# overlay_lambda_local lives in utils/obs.py — imported above as the single
+# source shared by PPO (here) and TD3/SAC (solvers/smoke_train.py).
+# build_manager_state imported from solvers._common (shared with smoke_train.py).
 
 
 # ============================================================
@@ -124,7 +89,7 @@ def train_ppo(
     n_episodes: int,
     seed: int = 0,
     log_dir: str = "logs",
-    initial_phase: int = 3,
+    initial_severity: int = 5,
     device: str = "cpu",
     print_every: int = 1,
     use_wandb: bool = False,
@@ -143,17 +108,20 @@ def train_ppo(
 ) -> dict:
     """Algorithm 1 main training loop. Returns final-episode stats."""
     # --- Setup env ---
-    env_cfg = hard_mission_config() if hard_mission else EnvConfig(initial_phase=initial_phase)
+    env_cfg = hard_mission_config() if hard_mission else EnvConfig(initial_severity=initial_severity)
     env = ORANEnv(config=env_cfg, seed=seed)
+    K = env.config.K_ambulances
+    F = env.config.num_streams
     state_dim_l = env.observation_space.shape[0]
     action_dim_l = env.action_space.shape[0]
-    assert state_dim_l == WORKER_STATE_DIM_DEFAULT, (
-        f"Worker obs dim {state_dim_l} != {WORKER_STATE_DIM_DEFAULT}"
+    assert state_dim_l == 20 + 10 * K + F, (
+        f"Worker obs dim {state_dim_l} != 20+10K+F (K={K}, F={F})"
     )
+    manager_state_dim_k = manager_state_dim(K)
 
     # --- Setup agents (PPO + LambdaState) ---
     manager = ManagerAgent(
-        state_dim=MANAGER_STATE_DIM_DEFAULT,
+        state_dim=manager_state_dim_k,
         action_dim=MANAGER_ACTION_DIM_DEFAULT,
         device=device,
         seed=seed,
@@ -170,11 +138,7 @@ def train_ppo(
     # disable_warm_start=True overrides default LAMBDA_WARM table with all-zero,
     # forcing cold-start dual ascent at every phase entry. Used to demonstrate
     # ≥80% reduction in time-to-reconverge claim (W12 Exp3).
-    if disable_warm_start:
-        zero_warm = {phi: np.zeros(5, dtype=np.float64) for phi in range(1, 6)}
-        lambda_state = LambdaState(lambda_warm=zero_warm)
-    else:
-        lambda_state = LambdaState()
+    lambda_state = LambdaState(K=K, force_zero_warm=disable_warm_start)
 
     # --- Setup logger ---
     logger = Logger(
@@ -189,7 +153,7 @@ def train_ppo(
         "seed": seed,
         "state_dim_l": state_dim_l,
         "action_dim_l": action_dim_l,
-        "manager_state_dim": MANAGER_STATE_DIM_DEFAULT,
+        "manager_state_dim": manager_state_dim_k,
         "manager_action_dim": MANAGER_ACTION_DIM_DEFAULT,
         "manager_steps_per_episode": MANAGER_STEPS_PER_EPISODE,
         "worker_steps_per_manager": WORKER_STEPS_PER_MANAGER,
@@ -213,30 +177,35 @@ def train_ppo(
     for ep in range(n_episodes):
         # ---------------- Episode reset + LambdaState sync ----------------
         obs, info = env.reset(seed=seed + ep)
-        phase_init = int(info["phase_now"])
-        lambda_state.reset_episode(phase_init)
+        severity_init = int(info["severity"])
+        severity_per_amb_init = tuple(int(s) for s in info["severity_per_amb"])
+        lambda_state.reset_episode(severity_per_amb_init, severity_init)
 
         # Fresh PPO buffers per episode (Phase 3.4.4 N8)
         buf_w = _make_storage(capacity_w, state_dim_l, action_dim_l)
-        buf_h = _make_storage(capacity_h, MANAGER_STATE_DIM_DEFAULT, MANAGER_ACTION_DIM_DEFAULT)
+        buf_h = _make_storage(capacity_h, manager_state_dim_k, MANAGER_ACTION_DIM_DEFAULT)
 
         ep_reward = 0.0
         worker_step_idx = 0
 
         # ---------------- Manager loop (10 steps per episode) ----------------
         for _k in range(MANAGER_STEPS_PER_EPISODE):
-            phi_now = int(info["phase_now"])
-            lambda_state.on_manager_step_start(phi_now)   # N9: sync BOTH λ_global + λ_local
+            severity_ref_now = int(info["severity"])
+            severity_per_amb_now = tuple(int(s) for s in info["severity_per_amb"])
+            lambda_state.on_manager_step_start(severity_per_amb_now, severity_ref_now)   # N9: sync BOTH λ_global + λ_local
 
             s_H = build_manager_state(obs, lambda_state.get_lambda_global())
             a_H_raw, log_prob_H, value_H = manager.act(s_H)
+            b_rrm = decode_manager_action(a_H_raw)["b_rrm"]
+            env.set_rrm_budget(b_rrm)
             r_H_acc = 0.0
+            intra_window_step = 0
             done_in_window = False
 
             # ---------------- Worker loop (W=10 steps per Manager step) ----------------
             for _t in range(WORKER_STEPS_PER_MANAGER):
                 # N4: expose λ_local through Worker observation
-                s_L = overlay_lambda_local(obs, lambda_state.get_lambda_local())
+                s_L = overlay_lambda_local(obs, lambda_state.get_lambda_local(), K)
                 a_raw, log_prob_L, value_L = worker.act(s_L)
 
                 next_obs, r_t, terminated, truncated, info = env.step(np.asarray(a_raw, dtype=np.float32))
@@ -249,7 +218,9 @@ def train_ppo(
 
                 _store(buf_w, s_L, a_raw, log_prob_L, r_aug, value_L, done)
 
-                r_H_acc += float(r_t)
+                # SMDP-discounted intra-window return: Σ γ_L^i · r_aug_i
+                r_H_acc += (GAMMA ** intra_window_step) * float(r_aug)
+                intra_window_step += 1
                 ep_reward += float(r_aug)
                 worker_step_idx += 1
                 obs = next_obs
@@ -271,12 +242,14 @@ def train_ppo(
         worker_metrics = _ppo_update_worker(worker, buf_w)
         manager_metrics = _ppo_update_manager(manager, buf_h)
 
-        # Capture the active dual state before flushing final-phase warm starts.
+        # Capture the active dual state before flushing severity warm starts.
         lam_g = lambda_state.get_lambda_global()
-        lambda_phase = int(lambda_state.phi_prev)
+        lambda_severity_per_amb = lambda_state.sev_prev
 
-        # Flush final active phase into lambda_warm before the next episode reload.
-        lambda_state.on_episode_end(final_phase=int(info["phase_now"]))
+        # Flush final active severity into lambda_warm before the next episode reload.
+        severity_ref_final = int(info["severity"])
+        severity_per_amb_final = tuple(int(s) for s in info["severity_per_amb"])
+        lambda_state.on_episode_end(severity_per_amb_final, severity_ref_final)
 
         # ---------------- Logging ----------------
         metrics: dict = {
@@ -285,13 +258,18 @@ def train_ppo(
             "viol_rate": env.episode_violation_rate(),
             "mean_embb_mbps": env.mean_embb_mbps(),
             "c3_viol_rate": env.c3_violation_rate(),
-            "phase_init": phase_init,
-            "phase_final": int(info["phase_now"]),
-            "lambda_phase": lambda_phase,
+            "severity_init": severity_init,
+            "severity_final": severity_ref_final,
+            "lambda_severity_per_amb": str(list(lambda_severity_per_amb)),
             "worker_steps": worker_step_idx,
         }
-        for j in range(5):
-            metrics[f"lambda_global_{j + 1}"] = float(lam_g[j])
+        # λ_global layout: [C1_0..C1_{K-1}, C2_0..C2_{K-1}, C4_0..C4_{K-1}, C5_0..C5_{K-1}, C3_shared]
+        for k in range(K):
+            metrics[f"lambda_global_C1_{k}"] = float(lam_g[k])
+            metrics[f"lambda_global_C2_{k}"] = float(lam_g[K + k])
+            metrics[f"lambda_global_C4_{k}"] = float(lam_g[2 * K + k])
+            metrics[f"lambda_global_C5_{k}"] = float(lam_g[3 * K + k])
+        metrics["lambda_global_C3_shared"] = float(lam_g[4 * K])
         for k, v in worker_metrics.items():
             metrics[k] = v
         for k, v in manager_metrics.items():
@@ -337,7 +315,7 @@ def train_ppo(
     summary["seed"] = seed
     summary["n_episodes"] = n_episodes
     summary["final_lambda_warm"] = {
-        int(k): v.tolist() for k, v in lambda_state.get_lambda_warm_table_snapshot().items()
+        str(k): v.tolist() for k, v in lambda_state.get_lambda_warm_table_snapshot().items()
     }
     summary_path = Path(log_dir) / f"summary_ppo_seed{seed}.json"
     summary_path.parent.mkdir(parents=True, exist_ok=True)
@@ -444,12 +422,12 @@ def _ppo_update_manager(manager, buf) -> dict[str, float]:
 def smoke_test(args: argparse.Namespace) -> int:
     print(f"[smoke-test] algo={args.algo} seed={args.seed}")
     try:
-        from utils.config import P_TOTAL, PHASE_QOS
+        from utils.config import P_TOTAL, SEVERITY_QOS
     except ImportError as exc:
         print(f"[smoke-test] FAILED — utils import error: {exc}", file=sys.stderr)
         return 1
     assert P_TOTAL == 273, f"P_TOTAL mismatch: {P_TOTAL} != 273"
-    assert PHASE_QOS[3]["D_max"] == 1e-3, "PHASE_QOS[3].D_max mismatch"
+    assert SEVERITY_QOS[5]["D_max"] == 1e-3, "SEVERITY_QOS[5].D_max mismatch"
     logger = Logger(
         run_name=f"smoke_{args.algo}_seed{args.seed}",
         log_dir=str(args.log_dir),
@@ -491,7 +469,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--hard", action="store_true", help="Use hard-mission preset")
     parser.add_argument("--print-every", type=int, default=1)
-    parser.add_argument("--phase", type=int, default=3)
+    parser.add_argument("--severity", type=int, default=5,
+                        help="Fixed patient severity 1..5 (NON_URGENT..IMMEDIATE) for the run")
     parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument(
         "--worker-ent-coef", type=float, default=0.01,
@@ -504,8 +483,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--no-warm-start", action="store_true",
-        help="Disable LAMBDA_WARM table (cold-start dual ascent at every phase). "
-             "Used for Exp3 phase-transition ablation (CF-2 audit fix 2026-05-28).",
+        help="Disable LAMBDA_WARM table (cold-start dual ascent at every severity).",
     )
     # Early stopping
     parser.add_argument("--early-stop", action="store_true",
@@ -533,7 +511,7 @@ def main() -> int:
             n_episodes=args.episodes,
             seed=args.seed,
             log_dir=str(args.log_dir),
-            initial_phase=args.phase,
+            initial_severity=args.severity,
             device=args.device,
             print_every=args.print_every,
             use_wandb=args.wandb,
@@ -559,7 +537,7 @@ def main() -> int:
         n_episodes=args.episodes,
         seed=args.seed,
         log_dir=str(args.log_dir),
-        initial_phase=args.phase,
+        initial_severity=args.severity,
         device=args.device,
         print_every=args.print_every,
         use_wandb=args.wandb,

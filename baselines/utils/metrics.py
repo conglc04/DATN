@@ -94,8 +94,8 @@ def assert_prb_budget(prb_urllc: int, prb_embb: int, p_total: int = 273) -> None
     )
 
 
-def assert_phase_constraint(phase: int, d_e2e_mean: float, d_max_phi: float) -> None:
-    assert d_e2e_mean <= d_max_phi, (
-        f"Phase φ{phase} constraint violated: mean={d_e2e_mean*1e3:.3f}ms > "
-        f"D_max={d_max_phi*1e3:.3f}ms"
+def assert_severity_constraint(severity: int, d_e2e_mean: float, d_max_sev: float) -> None:
+    assert d_e2e_mean <= d_max_sev, (
+        f"Severity {severity} constraint violated: mean={d_e2e_mean*1e3:.3f}ms > "
+        f"D_max={d_max_sev*1e3:.3f}ms"
     )

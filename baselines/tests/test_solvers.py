@@ -115,18 +115,18 @@ class TestCMDPLagrangian:
 
 class TestPhaseMask:
     def test_mask_zeros_out_phase_block(self):
-        from solvers._common import mask_phase, PHASE_OH_START_INDEX, PHASE_OH_LEN
+        from solvers._common import mask_severity, SEVERITY_OH_START_INDEX, SEVERITY_OH_LEN
         obs = np.arange(30).astype(np.float32)
-        out = mask_phase(obs)
-        assert np.all(out[PHASE_OH_START_INDEX : PHASE_OH_START_INDEX + PHASE_OH_LEN] == 0.0)
+        out = mask_severity(obs)
+        assert np.all(out[SEVERITY_OH_START_INDEX : SEVERITY_OH_START_INDEX + SEVERITY_OH_LEN] == 0.0)
         # Other entries preserved
         assert out[0] == 0.0
-        assert out[PHASE_OH_START_INDEX + PHASE_OH_LEN] != 0.0
+        assert out[SEVERITY_OH_START_INDEX + SEVERITY_OH_LEN] != 0.0
 
     def test_mask_does_not_mutate_input(self):
-        from solvers._common import mask_phase
+        from solvers._common import mask_severity
         obs = np.ones(30, dtype=np.float32)
-        _ = mask_phase(obs)
+        _ = mask_severity(obs)
         assert np.all(obs == 1.0)
 
 
@@ -150,14 +150,14 @@ class TestBaselineSmokeAPI:
     def test_instantiate(self, module_path, cls_name):
         import importlib
         cls = getattr(importlib.import_module(module_path), cls_name)
-        agent = cls(state_dim=31, action_dim=6, seed=0)
+        agent = cls(state_dim=28, action_dim=6, seed=0)
         assert agent is not None
 
     def test_select_action_shape(self, module_path, cls_name):
         import importlib
         cls = getattr(importlib.import_module(module_path), cls_name)
-        agent = cls(state_dim=31, action_dim=6, seed=0)
-        obs = np.zeros(31, dtype=np.float32)
+        agent = cls(state_dim=28, action_dim=6, seed=0)
+        obs = np.zeros(28, dtype=np.float32)
         action, log_prob, value = agent.select_action(obs)
         assert action.shape == (6,)
 
@@ -170,17 +170,17 @@ class TestBaselineSmokeAPI:
 class TestPhaseFlagSemantics:
     def test_b2_masks_phase(self):
         from solvers.b2_hrl_ppo_soft import B2HRLPPOSoftBaseline
-        agent = B2HRLPPOSoftBaseline(state_dim=31, action_dim=6, seed=0)
-        obs = np.arange(31, dtype=np.float32)
+        agent = B2HRLPPOSoftBaseline(state_dim=28, action_dim=6, seed=0)
+        obs = np.arange(28, dtype=np.float32)
         masked = agent.maybe_mask(obs)
         # Phase block should be zero
-        from solvers._common import PHASE_OH_START_INDEX, PHASE_OH_LEN
-        assert np.all(masked[PHASE_OH_START_INDEX : PHASE_OH_START_INDEX + PHASE_OH_LEN] == 0)
+        from solvers._common import SEVERITY_OH_START_INDEX, SEVERITY_OH_LEN
+        assert np.all(masked[SEVERITY_OH_START_INDEX : SEVERITY_OH_START_INDEX + SEVERITY_OH_LEN] == 0)
 
     def test_pa_ppo_soft_keeps_phase(self):
         from solvers.pa_ppo_soft import PAPPOSoftBaseline
-        agent = PAPPOSoftBaseline(state_dim=31, action_dim=6, seed=0)
-        obs = np.arange(31, dtype=np.float32)
+        agent = PAPPOSoftBaseline(state_dim=28, action_dim=6, seed=0)
+        obs = np.arange(28, dtype=np.float32)
         out = agent.maybe_mask(obs)
         np.testing.assert_array_equal(out, obs)
 
@@ -193,14 +193,23 @@ class TestPhaseFlagSemantics:
         # Old 2-dim API removed
         assert not hasattr(agent, "lagrangian")
 
+    def test_sac_keeps_phase(self):
+        # SAC is a phase-AWARE equal sibling: maybe_mask must keep the phase
+        # one-hot intact (same as PPO / TD3). Regression guard for fairness.
+        from solvers.sac import SACBaseline
+        agent = SACBaseline(state_dim=40, action_dim=6, seed=0)
+        assert agent.flags.use_phase is True
+        obs = np.arange(40, dtype=np.float32)
+        np.testing.assert_array_equal(agent.maybe_mask(obs), obs)
+
     def test_no_phase_has_5dim_lambda(self):
         from solvers.no_phase_ppo import NoPhasePPOBaseline
-        agent = NoPhasePPOBaseline(state_dim=31, action_dim=6, seed=0)
+        agent = NoPhasePPOBaseline(state_dim=28, action_dim=6, seed=0)
         assert agent.lagrangian.n == 5
 
     def test_static_has_no_lambda(self):
         from solvers.static_slicing import StaticSlicingBaseline
-        agent = StaticSlicingBaseline(state_dim=31, action_dim=6, seed=0)
+        agent = StaticSlicingBaseline(state_dim=28, action_dim=6, seed=0)
         assert not hasattr(agent, "lagrangian")
 
 
@@ -219,7 +228,7 @@ class TestSmokeTrainOneEpisode:
             n_episodes=1,
             seed=0,
             log_dir="logs/_smoke_unittest",
-            initial_phase=3,
+            initial_severity=3,
             print_every=10_000,           # silence
         )
         assert "ep_reward" in stats

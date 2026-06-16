@@ -8,7 +8,7 @@
 - `tests/test_env_week4.py`, `tests/test_env_hard.py` (hard mission φ₃).
 
 ## Sửa (audit post-cleanup)
-- ⚠️ **obs K=1 = 33-dim** (post gỡ LSTM 6 + MEC 1) — KHÔNG còn "31 stub / 40". Số chuẩn = derived từ field-set + `assert observation_space.shape`; chốt lại ở [W18](W18_pha3_algorithm_code.md) (audit #2). K=3 = 58-dim.
+- ⚠️ **obs K=1 = 33-dim** tại thời điểm W04 (post gỡ LSTM 6 + MEC 1). **Lịch sử: nay = 31 (K=1) / 51 (K=3)** sau refactor 2026-06-14/15 (phase→severity, F=4→1, per-amb queue/AoI + severity_k) — xem [08_implementation_notes.md](../08_implementation_notes.md). Số chuẩn = derived từ field-set + `assert observation_space.shape`; chốt lại ở [W18](W18_pha3_algorithm_code.md) (audit #2).
 
 ## Gate G1 ✅
 - D_e2e @ φ₃ (r_min=0.6) = D_tx+D_queue+D_FH+D_BH ≈ 0.7–0.9ms < 1ms ✓; ΣPRB ≤ 273 mọi tick; queue ρ<1 mọi slice.

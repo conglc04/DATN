@@ -3,7 +3,7 @@
 ## Tổng quan 2 tầng (HRL two-timescale)
 - **Manager (rApp, ~1s)**: discount γ_H; quyết budget inter-slice + temperature β.
 - **Worker (xApp, 10ms)**: discount γ_L; điều chỉnh RRMPolicyRatio + Lagrangian λ.
-- `W = WORKER_STEPS_PER_MANAGER = 10` (`config.py:315`); `γ_H ≈ γ_L^W`. ✅[`Akyıldız 2024`] *(Borkar/FeUdal vắng corpus)*. ⚠️ `γ_H/γ_L` = RL discount, KHÁC `β` priority temperature.
+- `W = WORKER_STEPS_PER_MANAGER = 10` (`config.py`); `γ_H ≈ γ_L^W`. ✅[`Akyıldız 2024`] *(Borkar/FeUdal vắng corpus)*. ⚠️ `γ_H/γ_L` = RL discount, KHÁC `β` priority temperature.
 
 ## Manager MDP (rApp)
 - **Action** (K=1): `{Δr_min^URLLC, Δr_max^eMBB, r_ded, w_C1, w_C2, w_C3}` = 6-dim. K=3: +**β** = 7-dim.
@@ -18,7 +18,7 @@
 `λ_c ← clip(λ_c + α_λ·g_c, 0, Λ_max)`, `α_λ=1e-4` (`ALPHA_LAMBDA_DUAL`), `Λ_max=10` (`LAMBDA_MAX`) — ✅[`Spoor 2025`; `Ding 2023`]. **λ-saturation logging** bắt buộc (sweep W18–W23): %step `λ==Λ_max` + cờ saturation-without-convergence.
 
 ## λ_warm — bridge rApp 1s gap
-Init λ mỗi episode từ `LAMBDA_WARM[phase]` (phase-aware prior, rule-based); EMA cập nhật qua phase transition. **Đây là cơ chế proactivity** (thay LSTM — đã loại).
+Init λ mỗi episode từ `λ_warm[severity_per_amb]` (`build_lambda_warm_vector` — keyed theo tuple severity per-xe; slot C3_shared dùng `severity_ref`): severity-aware prior, rule-based, đơn điệu tăng theo severity. EMA flush `λ_warm[sev] ← (1−β_ema)·λ_warm + β_ema·λ_global` ở **biên episode** (`on_episode_end`). Severity **cố định/episode** ⟹ KHÔNG transition trong-episode (path đổi-severity `on_manager_step_start` là no-op). **Đây là cơ chế proactivity** (thay LSTM — đã loại).
 
 ## Intra-slice priority (Worker, K≥2)
 `w_k = softmax(β·sev_k + δ·ũ_k)`, `PRB_k = b + S·w_k`, `b = max(κB_U/K, PRB_min^QoS)`. β squash `β_min+(β_max−β_min)·sigmoid(a_β)`. Structural guarantee (feasibility + ordering) by construction.

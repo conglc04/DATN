@@ -8,24 +8,24 @@
 
 ## P2 — Khung CMDP
 - **P2.1** `(S, A, P, r, {g_c}, γ)` primal-dual — ✅[`Yongshuai Liu…[2020].pdf`; `Wen Wu…[2020].pdf`; `Qiang Liu…[2021].pdf`] *(thay Altman 1999 — vắng corpus)*. ⚠️ `γ` ở đây = **RL discount của CMDP**, KHÁC `β` priority temperature (#3).
-- ⟲ state/action khớp PHẦN 2 (obs K=1=33 / K=3=58 assert @[W18](W18_pha3_algorithm_code.md); action 7-dim K=3).
+- ⟲ state/action khớp PHẦN 2 (obs K=1=31 / K=3=51 assert @[W18](W18_pha3_algorithm_code.md); action 7-dim K=3).
 
 ## P3 — Ràng buộc (mỗi cái 1 nguồn)
-- **P3.1** `C1: E[D_e2e^k] ≤ D_max^{φ_k}` — ✅[3GPP TS 22.261 §7.2/Annex A] (nối M6)
-- **P3.2** `C2: P(D_e2e^k > D_max^{φ_k}) ≤ ε^{φ_k}` — ✅[3GPP TS 22.261 §7.2] (nối M5)
+- **P3.1** `C1: E[D_e2e^k] ≤ D_max^{sev_k}` — ✅[3GPP TS 22.261 §7.2/Annex A] (nối M6)
+- **P3.2** `C2: P(D_e2e^k > D_max^{sev_k}) ≤ ε^{sev_k}` — ✅[3GPP TS 22.261 §7.2] (nối M5)
 - **P3.3** `C3: R_eMBB ≥ R_min` — ✅[`Alsenwi…pdf`; `Sohaib…pdf`]
-- **P3.4** `C4: E[AoI_k] ≤ AoI_max` — 🔴-declared (AoI_max M7.3=500ms placeholder); AoI→hard-constraint là khác biệt declared so với Qi/Chen (dùng AoI objective).
-- **P3.5** `C5: P(AoI_k > A_th) ≤ δ_tail` — `A_th=m·AoI_max` (m=2, sweep {1.5,2,3}), `δ_tail=1e-2` (sweep {1e-2,1e-3,ε^φ}). 🔴 trên (m,δ_tail), FORM grounded; demote optional nếu bất định.
-- **P3.6** `C6: s_i>s_j ⟹ E[D_e2e^i] ≤ E[D_e2e^j]` — **DEMOTE → metric chẩn đoán** (#13): bảo đảm severity = (1) weight-ordering structural + (2) C1/C2 per-xe; C6 chỉ báo cáo **priority-inversion rate** (soft-nudge dead-band+slack-gate optional, λ_C6 **per-pair** #14). Giới hạn channel-infeasibility declared.
+- **P3.4** `C4: E[AoI_k] ≤ AoI_max^{sev_k}` — 🔴-declared (AoI_max M7.3=500ms placeholder); AoI→hard-constraint là khác biệt declared so với Qi/Chen (dùng AoI objective).
+- **P3.5** `C5: P(AoI_k > AoI_max^{sev_k}) ≤ ε_AoI^{sev_k}` — **cùng ngưỡng `AoI_max^{sev_k}` như C4** (m=1, đối xứng cặp C1/C2 dùng `D_max`; `ε_AoI` đối xứng `ε` của C2); budget `ε_AoI^{sev_k}` per-severity = code `eps_aoi` (`SEVERITY_QOS`) / `d5_aoi_tail` (`CMDP_D_J_SEVERITY`). 🔴-declared, FORM grounded.
+- **P3.6** `C6: severity_per_amb[i]>severity_per_amb[j] ⟹ E[D_e2e^i] ≤ E[D_e2e^j]` — **DEMOTE → metric chẩn đoán** (#13): bảo đảm severity = (1) weight-ordering structural + (2) C1/C2 per-xe; C6 chỉ báo cáo **priority-inversion rate** (KHÔNG λ_C6, KHÔNG Lagrangian — bảo đảm bằng §2.4 weight-ordering structural + C1/C2 per-xe). Giới hạn channel-infeasibility declared.
 
 ## P4 — Lagrangian relaxation
 - **P4.1** `L = J − Σ_c λ_c·g_c`; `λ_c ← clip(λ_c + α_λ·g_c, 0, Λ_max)` — ✅[`Lindsay Spoor…[2025].pdf`; `Dongsheng Ding…[2023].pdf`] *(thay Boyd/Tessler)*.
 - **P4.2** Disclaimer **đối ngẫu yếu** (no zero-duality-gap, deep-NN) — ✅[`Lindsay Spoor…[2025].pdf`].
 
 ## P5 — Tầng intra-slice (cấu trúc)
-- **P5.1** Guaranteed-min Option B: `b=max(κ·B_U/K, PRB_min^QoS@SINR_ref)`, `S=B_U−K·b`, `w_k=softmax(β·sev_k + δ·ũ_k)`, `PRB_k=b+S·w_k`. β = priority temp ∈[β_min,β_max] (squash sigmoid; β_min≈0.5 chống collapse; β_max≈4) — ✅ nguyên lý weighted-priority [3GPP TS 23.501 §5.7 5QI] *(WFQ Parekh&Gallager vắng corpus → "tương tự WFQ" KHÔNG ✅)*.
-- **P5.2** 2 structural guarantee (đại số tự chứa, verify bằng test): feasibility `ΣPRB=B_U` (cần `B_U≥K·PRB_min^QoS`); no-starvation CỨNG `PRB_k≥b≥PRB_min^QoS`; weight-ordering đơn điệu `sev_i>sev_j⟹w_i>w_j` (đảm bảo bởi `δ=ρ·β, ρ<0.2`).
-- **P5.3** Tiebreaker cấp 2 `urgency_k=Σ_c λ_Cc^k` (đã trong obs, ũ_k=urgency/max ∈[0,1], #16) — phá hòa CHỈ trong cùng tier.
+- **P5.1** Guaranteed-min Option B: `b=max(floor(κ·B_U/K), PRB_min^QoS)` (fallback `b=B_U//K` nếu `K·b>B_U`), `S=B_U−K·b`, `w_k=softmax(β·severity_per_amb[k] + δ·ũ_k)`, `PRB_k=b+S·w_k`. β = priority temp ∈[BETA_MIN,BETA_MAX]=[0,5] (squash sigmoid từ action a[6], K≥2; K=1: β≡BETA_MIN) — ✅ nguyên lý weighted-priority [3GPP TS 23.501 §5.7 5QI] *(WFQ Parekh&Gallager vắng corpus → "tương tự WFQ" KHÔNG ✅)*.
+- **P5.2** 2 structural guarantee (đại số tự chứa, verify bằng test `tests/test_env_severity_k.py`): feasibility `ΣPRB=B_U` (cần `B_U≥K·PRB_min^QoS`); no-starvation CỨNG `PRB_k≥b≥PRB_min^QoS`; weight-ordering đơn điệu `severity_per_amb[i]>severity_per_amb[j]⟹w_i>w_j` (đảm bảo bởi `δ=ρ·β, ρ=RHO_URGENCY_TIEBREAK=0.15`). K=1: `softmax([x])=[1.0]` ⟹ `PRB_0=B_U` luôn (numeric preservation).
+- **P5.3** Tiebreaker cấp 2 `urgency_k=λ_C1_k` (per-amb λ_local trong obs per-amb block, `ũ_k=λ_C1_k/max(λ_C1)∈[0,1]`, #16) — phá hòa CHỈ trong cùng tier.
 
 ## ⟲ RÀ SOÁT P1–P5
 softmax đơn điệu theo sev (test mọi pair, kể cả ũ biên); Σw=1; b≤PRB_k≤B_U; C6 ghi rõ "soft/metric, không zero-violation"; ký hiệu khớp 1-1 obs/action PHẦN 2; γ(RL)≠β(priority).

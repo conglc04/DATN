@@ -4,7 +4,7 @@ Integrates all Week 2-3 modules into a TTI-level simulator:
     - Channel: SINR per UE per cell
     - Queue: M/G/1 per slice
     - Traffic: URLLC + eMBB generators
-    - Phase: 5-state FSM (held fixed or trajectory-driven via reset opts)
+    - Severity: 5-level patient-urgency tier (exogenous, fixed per episode)
     - AoI: stream-aware trackers
 
 Time hierarchy (sim — compressed per docs/08:305-336):
@@ -12,23 +12,30 @@ Time hierarchy (sim — compressed per docs/08:305-336):
     Manager action every T_H_sim = 10ms (Week 8+ wires hierarchical wrapper)
     Worker action every T_L_sim = 0.5ms = 1 TTI  ← env.step() unit
 
-Action space (6-dim continuous, per docs/05:103-114):
+Action space (6-dim for K=1, 7-dim for K>=2, per docs/05:103-114 + B5
+severity_k epic 2026-06-15):
     a[0] = Δr_min^URLLC   ∈ [-1, +1] → decoded ×0.1 → [-0.1, +0.1]
     a[1] = Δr_max^eMBB    ∈ [-1, +1] → decoded ×0.1
     a[2] = r_ded_ratio    ∈ [ 0,  1] → r_ded = min(0.2, r_ded_ratio × r_min)
     a[3..5] = w_C1, w_C2, w_C3 (Softmax later — env stores raw logits)
+    a[6] = β priority temperature (K>=2 only) → sigmoid → [BETA_MIN, BETA_MAX],
+           drives the intra-slice Π_feasible PRB split across ambulances.
 
-Observation (Worker s_L, flattened — dim depends on K, F):
+Observation (Worker s_L, flattened, obs_dim = 20 + 10K + F):
+    == Fixed 20-dim block ==
     Q_urllc, Q_eMBB                      (queue lengths, packets)
     HOL_urllc, HOL_eMBB                  (sec)
-    PRB_alloc_urllc, PRB_alloc_eMBB      (fraction of P_TOTAL)
-    SINR_per_ambulance                    (dB)
+    PRB_alloc_urllc, PRB_alloc_eMBB, PRB_ded_urllc (fraction of P_TOTAL)
     arrival_rate_urllc, arrival_rate_eMBB
     mean_BLER_cell
-    phase one-hot (5-dim)
+    severity_ref one-hot (5-dim)
+    λ_local^C3 (shared, 1-dim)
+    rrm_budget (1-dim placeholder), n_bys, mean AoI, max AoI
+    == 10K per-ambulance block (interleaved) ==
+    SINR_k, d_k, v_k, delay_norm_k, AoI_norm_k, severity_k_norm,
+    λ_local^C1_k, λ_local^C2_k, λ_local^C4_k, λ_local^C5_k
+    == F per-stream block ==
     AoI_per_stream                        (sec)
-    λ_local (5-dim)
-    rrm_budget (1-dim placeholder)
 
 Reference:
     - docs/08_implementation_notes.md TTI Simulation Loop
@@ -52,25 +59,44 @@ from env.channel_model import (
     thermal_noise_dbm,
 )
 from env.queue_model import MG1Queue, SliceQueueManager
-from env.aoi_tracker import AoIStreamTracker, STREAM_TYPES, aoi_threshold_for_phase
-from env.phase_detector import Phase, PhaseDetector
+from env.aoi_tracker import AoIStreamTracker
 from utils.config import (
+    AMB_AOI_NORM_OFFSET,
+    AMB_DELAY_NORM_OFFSET,
+    AMB_DIST_OFFSET,
+    AMB_LAMBDA_C1_OFFSET,
+    AMB_LAMBDA_C2_OFFSET,
+    AMB_LAMBDA_C4_OFFSET,
+    AMB_LAMBDA_C5_OFFSET,
+    AMB_SEVERITY_NORM_OFFSET,
+    AMB_SINR_OFFSET,
+    AMB_SPEED_OFFSET,
     B_PRB,
-    CMDP_D_J_PHI,
+    B_RRM_MAX,
+    B_RRM_MIN,
+    BETA_MAX,
+    BETA_MIN,
+    CMDP_D_J_SEVERITY,
     D_BH,
     D_DET,
     D_FH,
     D_REF_URLLC,
     D_STOCH,
+    INTRA_SLICE_KAPPA,
+    LAMBDA_C3_SHARED_OBS_INDEX,
     MAC_TICKS_PER_WORKER,
-    PHASE_ALPHA,
-    PHASE_QOS,
+    OBS_FIXED_BLOCK_LEN,
+    OBS_PER_AMB_BLOCK_LEN,
+    PRB_MIN_QOS,
+    RHO_URGENCY_TIEBREAK,
+    SEVERITY_OH_OBS_INDEX,
+    SEVERITY_QOS,
     P_TOTAL,
     R_REF_EMBB_MBPS,
     SHANNON_ETA,
     TTI_SEC,
-    get_phase_alpha,
-    get_phase_thresholds,
+    build_d_phi_vector,
+    get_severity_alpha,
 )
 
 
@@ -94,12 +120,13 @@ def _expit(x: float) -> float:
     return z / (1.0 + z)
 
 
-# Streams tracked per ambulance (subset for Week 4 — full set in Week 8)
+# Single consolidated AoI-tracked stream per ambulance (F=1, 2026-06-14
+# stream consolidation): replaces the prior 4-stream HR/SpO2/ECG/DENM split.
+# Conceptually a periodic status bundle (🔴 declared envelope: ~500-1500B,
+# ~10-20Hz) carrying both patient-monitoring and V2X telemetry as one
+# aggregated URLLC payload per report-cycle — see docs/02_requirements.md.
 DEFAULT_AOI_STREAMS: tuple[str, ...] = (
-    "HR_aggregated",
-    "SpO2_aggregated",
-    "ECG_waveform",
-    "DENM",
+    "ambulance_status",
 )
 
 
@@ -114,12 +141,23 @@ class EnvConfig:
 
     K_ambulances: int = 1
     M_eMBB: int = 30
-    num_streams: int = 4
-    initial_phase: int = 3                  # default φ₃ SCENE for sanity
+    num_streams: int = 1
+    initial_severity: int = 5               # default IMMEDIATE (tightest) for sanity
+    # Severity_k epic (2026-06-15): each of the K ambulances carries an
+    # INDEPENDENT severity_k in {1..5}, sampled independently and fixed for the
+    # episode (severity_per_amb). severity_ref := max(severity_per_amb) drives
+    # all SHARED quantities (alpha_e reward weight, C3 R_min, severity one-hot,
+    # info["severity"]). For training diversity, set sample_severity=True to
+    # draw a fresh independent level per ambulance each reset() from
+    # severity_sample_weights. When False, every ambulance uses initial_severity
+    # (=> severity_per_amb = [initial_severity]*K, severity_ref = initial_severity,
+    # exact K=1 legacy behaviour).
+    sample_severity: bool = False
+    severity_sample_weights: tuple[float, ...] = (0.20, 0.20, 0.20, 0.20, 0.20)
     episode_duration_sec: float = 1.0
     tti_sec: float = TTI_SEC
     # Traffic rates (steady state, before phase scaling)
-    urllc_arrival_rate: float = 50.0        # DENM steady (pkt/s/ambulance)
+    urllc_arrival_rate: float = 50.0        # ambulance_status steady (pkt/s/ambulance)
     embb_arrival_rate: float = 1000.0       # per eMBB UE (pkt/s)
     urllc_packet_bits: int = 400 * 8        # 400B → 3200 bits
     embb_packet_bits: int = 1500 * 8        # MTU
@@ -135,12 +173,16 @@ class EnvConfig:
     bs_tx_power_dbm: float = 46.0           # macro default; reduce for hard mission
     sinr_clamp_max_db: float = 40.0         # cap to avoid log saturation
     sinr_clamp_min_db: float = -10.0
-    # Phase Lagrangian placeholders (filled by HRL wrapper in Week 8/9)
-    lambda_local: tuple[float, ...] = (0.0, 0.0, 0.0, 0.0, 0.0)
+    # λ_local dual variables live in the agent's LambdaState; the env caches
+    # the latest snapshot via set_lambda_local() (used by _observe() and the
+    # Π_feasible urgency tiebreaker). The training loop additionally overlays
+    # λ_local onto the returned obs via utils.obs.overlay_lambda_local (single
+    # source, applied by every solver driver) so the policy sees the value
+    # computed for the SAME decision step (the env's cached copy lags by one
+    # step at the start of each Worker decision).
     rrm_budget_hint: float = 0.6            # Manager hint for r_min^URLLC
 
     # ---- Hard-mission features (opt-in, default disabled) -----------------
-    phase_trajectory: tuple[tuple[float, int], ...] | None = None
     urllc_burst_at_sec: float | None = None
     urllc_burst_duration_sec: float = 0.10
     urllc_burst_factor: float = 10.0
@@ -150,21 +192,11 @@ class EnvConfig:
     bystander_per_ue_mbps: tuple[float, float] = (2.0, 5.0)
     # ---- Phase 2.1 reward (W05 refactor + post-critique restructure W12) ---
     # Reward is eMBB log-utility ONLY (single-term objective):
-    #   r = α_e(φ) · U_eMBB(t),  U_eMBB = log(1 + R_eMBB / R_REF_EMBB_MBPS)
+    #   r = α_e(sev) · U_eMBB(t),  U_eMBB = log(1 + R_eMBB / R_REF_EMBB_MBPS)
     # URLLC enforced via Lagrangian C1, C2 (LambdaState), NOT via reward penalty.
     # Pre-restructure form r = -α_U · L_URLLC + α_e · U_eMBB caused double-counting
     # with λ_1, λ_2 (W11 audit found λ_1, λ_2 stagnated). L_URLLC retained in info
     # dict for diagnostics only. See docs/13 §2.1, docs/05 #reward-rl.
-
-
-# Map (current_phase, next_phase) → event name (per docs/03 phase FSM).
-_NEXT_PHASE_EVENT: dict[tuple[Phase, Phase], str] = {
-    (Phase.STANDBY, Phase.DISPATCH): "dispatch_call_received",
-    (Phase.DISPATCH, Phase.SCENE): "arrived_at_scene",
-    (Phase.SCENE, Phase.TRANSPORT): "patient_loaded",
-    (Phase.TRANSPORT, Phase.RETURN): "arrived_at_hospital",
-    (Phase.RETURN, Phase.STANDBY): "return_to_station",
-}
 
 
 def hard_mission_config(
@@ -172,37 +204,27 @@ def hard_mission_config(
     K_ambulances: int = 1,
     seed: int = 0,
 ) -> EnvConfig:
-    """Pre-built "hard" scenario per docs/02 S1 + S2B and docs/03 phase FSM.
+    """Pre-built "hard" scenario per docs/02 S1 + S2B.
 
-    Compressed to 1s sim time:
-        0.00s  φ₁ STANDBY
-        0.20s  φ₂ DISPATCH
-        0.40s  φ₃ SCENE (+ bystander spike, eMBB jumps to 80-120 UEs)
-        0.45s  URLLC burst window (DENM ×10 for 100ms)
-        0.70s  φ₄ TRANSPORT
-        0.95s  φ₅ RETURN
+    Fixed IMMEDIATE severity (severity 5 — tightest QoS) for the whole 1s episode,
+    plus the channel/traffic stressors that force solvers to actually fight:
+        0.45s  URLLC burst window (DENM ×50 for 100ms)
+        0.40s  bystander S2B spike (eMBB jumps to 80-120 UEs)
 
-    Reductions vs easy config that force solvers to actually fight:
-        - SINR clamp 40 → 30 dB; TX power 46 → 38 dBm (micro cell typical)
-        - Ambulance starts at 100m and moves at 60 km/h → SINR drifts
-        - URLLC burst ×10 at φ₃ → tail probability stressed
+    Reductions vs easy config:
+        - SINR clamp 40 → 15 dB; TX power 46 → 30 dBm (micro cell typical)
+        - Ambulance starts at 150m and moves at 60 km/h → SINR drifts
+        - URLLC burst ×50 → tail probability stressed
         - Bystander S2B 80-120 UEs at 2-5 Mbps → eMBB demand surge 200-500 Mbps
     """
     return EnvConfig(
         K_ambulances=K_ambulances,
-        initial_phase=1,                            # overridden by trajectory[0]
-        phase_trajectory=(
-            (0.0,  1),
-            (0.2,  2),
-            (0.4,  3),
-            (0.7,  4),
-            (0.95, 5),
-        ),
+        initial_severity=5,                         # IMMEDIATE — tightest QoS
         # Aggressive URLLC burst so a static r_min=0.05 hint cannot absorb it
         urllc_burst_at_sec=0.45,
         urllc_burst_duration_sec=0.10,
         urllc_burst_factor=50.0,
-        # Bystander S2B spike concurrent with φ₃
+        # Bystander S2B spike (eMBB demand surge)
         enable_bystander=True,
         bystander_trigger_sec=0.4,
         bystander_peak_range=(80, 120),
@@ -216,12 +238,11 @@ def hard_mission_config(
         cell_radius_m=300.0,
         M_eMBB=30,
         urllc_arrival_rate=50.0,
-        # Critical: tiny URLLC PRB budget at start (mirrors φ₁ STANDBY profile).
-        # Static policy keeps this throughout the whole 1-second mission and
-        # therefore cannot serve the φ₃ burst. PPO is expected to
-        # raise r_min during φ₃ via the phase-aware action.
+        # Critical: tiny URLLC PRB budget at start. A static policy keeps this
+        # throughout the whole 1-second mission and therefore cannot serve the
+        # URLLC burst. PPO is expected to raise r_min in response to the burst.
         # Calibration: at hint=0.02 with SINR clamp 15 dB and burst factor 50,
-        # peak ρ ≈ 0.85 during φ₃ → mean D_e2e ≈ 1.5-2 ms on burst TTI
+        # peak ρ ≈ 0.85 during the burst → mean D_e2e ≈ 1.5-2 ms on burst TTI
         # → mean(D_e2e > 1ms) ≈ 4-10% across full episode for Static.
         rrm_budget_hint=0.02,
     )
@@ -239,42 +260,35 @@ class ORANEnv(gym.Env):
         self.rng = np.random.default_rng(seed)
 
         # ---------------- Spaces ----------------
-        # 6-dim action: Δr_min, Δr_max, r_ded_ratio, w_C1, w_C2, w_C3
-        self.action_space = spaces.Box(
-            low=np.array([-1.0, -1.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32),
-            high=np.array([+1.0, +1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32),
-            dtype=np.float32,
-        )
-
         K = self.config.K_ambulances
         F = self.config.num_streams
-        # Phase 1.1 formal Worker state s_t^L = 26 + 3K + F dims (docs/13 Phase 1.2)
-        #   26-dim fixed block (queue, HOL, PRB_util, arr_rates, BLER,
-        #                       phase one-hot, λ_local, rrm_budget, n_bys,
-        #                       AoI summary, ETA_next, t_phi)
-        #   3K per-ambulance block (SINR, distance, speed)
+        # Action space: 6-dim for K=1 (unchanged legacy), 7-dim for K>=2
+        # (adds a[6] = β priority temperature, B5 severity_k epic 2026-06-15).
+        # Δr_min, Δr_max, r_ded_ratio, w_C1, w_C2, w_C3[, β]
+        if K >= 2:
+            self.action_space = spaces.Box(
+                low=np.array([-1.0, -1.0, 0.0, 0.0, 0.0, 0.0, -3.0], dtype=np.float32),
+                high=np.array([+1.0, +1.0, 1.0, 1.0, 1.0, 1.0, +3.0], dtype=np.float32),
+                dtype=np.float32,
+            )
+        else:
+            self.action_space = spaces.Box(
+                low=np.array([-1.0, -1.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32),
+                high=np.array([+1.0, +1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32),
+                dtype=np.float32,
+            )
+
+        # Formal Worker state s_t^L = 20 + 10K + F dims (per-ambulance
+        # severity_k epic 2026-06-15):
+        #   20-dim fixed block (queue, HOL, PRB_util, arr_rates, BLER,
+        #                       severity_ref one-hot, λ_local^C3 shared,
+        #                       rrm_budget, n_bys, AoI summary)
+        #   10K per-ambulance block, INTERLEAVED per ambulance:
+        #     SINR_k, d_k, v_k, delay_norm_k, AoI_norm_k, severity_k_norm,
+        #     λ_local^C1_k, λ_local^C2_k, λ_local^C4_k, λ_local^C5_k
         #   F per-stream block (AoI per stream)
-        # For K=1, F=4 → 26 + 3 + 4 = 33 dim. (LSTM + MEC removed — B0/B0b)
-        obs_dim = (
-            # === Fixed 26-dim block ===
-            2     # Q_urllc, Q_eMBB
-            + 2   # HOL_urllc, HOL_eMBB
-            + 3   # PRB ratios: r_min^URLLC, r_max^eMBB, r_ded^URLLC (Phase 1.1)
-            + 2   # arrival_rate_urllc, arrival_rate_eMBB (normalized)
-            + 1   # mean BLER
-            + 5   # phase one-hot
-            + 1   # t_phi (normalized time elapsed in current phase)
-            + 1   # ETA_next (s, normalized)
-            + 5   # λ_local (5 hard constraints)
-            + 1   # rrm_budget hint (Manager → Worker)
-            + 1   # n_bys (active bystander UE count, normalized)
-            + 2   # mean AoI + max AoI (across F streams)
-            # = 26 fixed
-            # === 3K per-ambulance block ===
-            + 3 * K  # SINR_k (dB clamped, normalized), d_k (distance to BS), v_k (speed)
-            # === F per-stream block ===
-            + F   # AoI per stream
-        )
+        # For K=1, F=1 → 20 + 10 + 1 = 31 dim (was 30).
+        obs_dim = OBS_FIXED_BLOCK_LEN + OBS_PER_AMB_BLOCK_LEN * K + F
         self._obs_dim = obs_dim
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
@@ -292,16 +306,28 @@ class ORANEnv(gym.Env):
         # ---------------- Per-episode state (set by reset) ----------------
         self.ambulance_pos: np.ndarray            # (K, 2)
         self.ambulance_vel: np.ndarray            # (K, 2)
-        self.phase_dets: list[PhaseDetector]
+        self.severity_per_amb: np.ndarray         # (K,) independent severity_k 1..5 (fixed/episode)
+        self.severity: int                        # severity_ref = max(severity_per_amb), drives SHARED quantities
+        self._lambda_local: np.ndarray            # (4K+1,) λ_local, set via set_lambda_local()
+        self._beta: float                         # priority temperature for Π_feasible (K>=2)
         self.queues: SliceQueueManager
-        self.aoi_trackers: dict[str, AoIStreamTracker]
+        self.aoi_trackers: list[dict[str, AoIStreamTracker]]
         self.tti_idx: int
         self.sim_time: float
         self.r_min_urllc: float
+        self.r_min_urllc_anchor: float      # Manager setpoint; obs[16]; fixed per window
         self.r_max_emBB: float
         self.r_ded_urllc: float
         self.last_sinr_db: np.ndarray
         self.last_bler: float
+        # PRB allocation cache — set once per step() after _apply_action(),
+        # read by _info() to avoid re-calling impure _prb_allocation/_prb_split_intra_slice.
+        self._last_prb_urllc: int
+        self._last_prb_embb: int
+        self._last_prb_per_amb: np.ndarray  # (K,) int64
+        # Feasibility bounds for set_rrm_budget() — computed at reset()
+        self._feasible_rrm_floor: float
+        self._feasible_rrm_cap: float
         # Diagnostics
         self.e2e_history: list[float]
         self.viol_history: list[bool]
@@ -340,22 +366,37 @@ class ORANEnv(gym.Env):
         head = self.rng.uniform(0.0, 2.0 * math.pi, size=K)
         self.ambulance_vel = speed_ms * np.stack([np.cos(head), np.sin(head)], axis=1)
 
-        # Phase detectors. Initial phase comes from (in order of precedence):
-        #   1) options["initial_phase"] (manual override)
-        #   2) phase_trajectory[0][1] (hard-mission preset)
-        #   3) config.initial_phase
-        if options and "initial_phase" in options:
-            phase = options["initial_phase"]
-        elif self.config.phase_trajectory:
-            phase = self.config.phase_trajectory[0][1]
+        # Per-ambulance severity_k (exogenous patient urgency, independent per
+        # ambulance, fixed for the whole episode — B5 severity_k epic
+        # 2026-06-15). Precedence:
+        #   1) options["severity_per_amb"] (manual override, shape (K,))
+        #   2) options["initial_severity"] (manual override, broadcast to all K)
+        #   3) sampled independently per ambulance from severity_sample_weights
+        #      (if sample_severity)
+        #   4) config.initial_severity (broadcast to all K)
+        # severity_ref := max(severity_per_amb) drives all SHARED quantities
+        # (alpha_e reward weight, C3 R_min, severity one-hot, info["severity"]).
+        # At K=1 this reduces exactly to the legacy scalar severity.
+        if options and "severity_per_amb" in options:
+            severity_per_amb = np.asarray(options["severity_per_amb"], dtype=np.int64)
+            if severity_per_amb.shape != (K,):
+                raise ValueError(
+                    f"options['severity_per_amb'] shape {severity_per_amb.shape} != ({K},)"
+                )
+        elif options and "initial_severity" in options:
+            severity_per_amb = np.full(K, int(options["initial_severity"]), dtype=np.int64)
+        elif self.config.sample_severity:
+            w = np.asarray(self.config.severity_sample_weights, dtype=np.float64)
+            severity_per_amb = self.rng.choice(
+                np.arange(1, 6), size=K, p=w / w.sum()
+            ).astype(np.int64)
         else:
-            phase = self.config.initial_phase
-        self.phase_dets = [
-            PhaseDetector(current_phase=Phase(phase), reported_phase=Phase(phase),
-                          rng=np.random.default_rng(self._seed if self._seed is not None else 0))
-            for _ in range(K)
-        ]
-        self._trajectory_idx = 0 if self.config.phase_trajectory else -1
+            severity_per_amb = np.full(K, int(self.config.initial_severity), dtype=np.int64)
+        for sev in severity_per_amb:
+            if int(sev) not in SEVERITY_QOS:
+                raise ValueError(f"Invalid severity {sev}; must be 1..5")
+        self.severity_per_amb = severity_per_amb
+        self.severity = int(severity_per_amb.max())  # severity_ref
 
         # Bystander S2B model
         if self.config.enable_bystander:
@@ -371,48 +412,86 @@ class ORANEnv(gym.Env):
         else:
             self.bystander = None
 
-        # Queues — start empty, μ comes from initial PRB hint
+        # Queues — start empty, μ comes from initial PRB hint.
+        # URLLC is split per-ambulance (urllc_0..urllc_{K-1}) so each
+        # ambulance's D_e2e can be observed independently (2026-06-14 fix).
+        # eMBB stays a single pooled queue (bystander traffic, not per-ambulance).
         self.queues = SliceQueueManager()
-        self.queues.add(MG1Queue(name="urllc", arrival_rate=0.0,
-                                  mean_packet_bits=self.config.urllc_packet_bits))
+        for k in range(K):
+            self.queues.add(MG1Queue(name=f"urllc_{k}", arrival_rate=0.0,
+                                      mean_packet_bits=self.config.urllc_packet_bits))
         self.queues.add(MG1Queue(name="eMBB", arrival_rate=0.0,
                                   mean_packet_bits=self.config.embb_packet_bits))
 
-        # AoI trackers
-        self.aoi_trackers = {
-            sid: AoIStreamTracker.from_spec(sid) for sid in DEFAULT_AOI_STREAMS
-        }
+        # AoI trackers — one dict-of-streams per ambulance (2026-06-14 fix)
+        self.aoi_trackers = [
+            {sid: AoIStreamTracker.from_spec(sid) for sid in DEFAULT_AOI_STREAMS}
+            for _ in range(K)
+        ]
 
         # MAC ratios — initialise from Manager hint
         self.r_min_urllc = self.config.rrm_budget_hint
+        self.r_min_urllc_anchor = self.r_min_urllc   # Manager setpoint anchor; obs[16]
         self.r_max_emBB = 1.0 - self.r_min_urllc
         self.r_ded_urllc = 0.1
+
+        # Feasibility bounds for set_rrm_budget() (conservative, recomputed each reset).
+        # Floor: K × min-PRBs-per-ambulance at SINR=0dB with ×5 QoS safety margin.
+        # Cap:   ensures enough PRBs remain for max-severity eMBB floor at SINR=0dB.
+        sinr_0db_cap_bps = B_PRB * SHANNON_ETA * math.log2(2.0)   # ≈ 270 kbps/PRB at 0dB
+        safety_factor = 5.0
+        need_bps = self.config.urllc_arrival_rate * self.config.urllc_packet_bits * safety_factor
+        min_prb_per_amb = math.ceil(need_bps / max(sinr_0db_cap_bps, 1.0))
+        self._feasible_rrm_floor = min(
+            B_RRM_MAX,
+            K * min_prb_per_amb / max(P_TOTAL, 1),
+        )
+        max_sev = max(CMDP_D_J_SEVERITY.keys())
+        d3_mbps = float(CMDP_D_J_SEVERITY[max_sev]["d3_embb_mbps"])
+        min_embb_prb = math.ceil(d3_mbps * 1e6 / max(sinr_0db_cap_bps, 1.0))
+        self._feasible_rrm_cap = max(
+            B_RRM_MIN,
+            1.0 - min_embb_prb / max(P_TOTAL, 1),
+        )
+
+        # PRB allocation cache — zeros until first step()
+        self._last_prb_urllc = 0
+        self._last_prb_embb = 0
+        self._last_prb_per_amb = np.zeros(K, dtype=np.int64)
 
         # Sim time + diagnostics
         self.tti_idx = 0
         self.sim_time = 0.0
         self.last_sinr_db = np.full(K, 15.0)
         self.last_bler = 0.0
+        # Per-ambulance D_e2e / AoI cache, refreshed every MAC tick — read by
+        # _observe() for delay_norm_k / AoI_norm_k (2026-06-14 fix).
+        self._last_d_e2e_per_amb = np.zeros(K, dtype=np.float64)
+        self._last_aoi_per_amb = np.zeros(K, dtype=np.float64)
         self.e2e_history = []
         self.viol_history = []
         self.prb_alloc_history = []
         self.embb_mbps_history = []
         self.c3_viol_history = []
         self.last_embb_mbps = 0.0
-        # Per-Worker-step constraint accumulator (5 hard, reset each Worker step in step())
-        self._worker_c_accum = np.zeros(5, dtype=np.float64)
+        # Per-Worker-step constraint accumulator ((4K+1)-dim, reset each
+        # Worker step in step()) — B5 severity_k epic 2026-06-15 layout:
+        #   [C1_0..C1_{K-1}, C2_0..C2_{K-1}, C4_0..C4_{K-1}, C5_0..C5_{K-1}, C3_shared]
+        n_c = 4 * K + 1
+        self._worker_c_accum = np.zeros(n_c, dtype=np.float64)
         self._worker_tick_count = 0
         # Last computed Worker-step c_vec + d_phi (for info dict)
-        self._last_c_vec = np.zeros(5, dtype=np.float32)
+        self._last_c_vec = np.zeros(n_c, dtype=np.float32)
         self._last_l_urllc: float = 0.0    # URLLC mean delay (D/D_ref) — diagnostics only
-        # Initialize d_phi from current phase (so reset() returns valid info immediately)
-        th0 = get_phase_thresholds(int(self.phase_dets[0].current_phase))
-        self._last_d_phi = np.array(
-            [th0["d1"], th0["d2"], th0["d3"], th0["d4"], th0["d5"]], dtype=np.float32
-        )
-        # Phase entry time tracker (for t_phi normalization in observation)
-        self._phase_entry_time: float = 0.0
-        self._last_observed_phase: int = int(self.phase_dets[0].current_phase)
+        # Initialize d_phi from severity_per_amb (so reset() returns valid info immediately)
+        self._last_d_phi = build_d_phi_vector(self.severity_per_amb).astype(np.float32)
+
+        # λ_local — env-internal storage, default zeros; overwritten by
+        # set_lambda_local() each Worker step (train.py / solver drivers).
+        self._lambda_local = np.zeros(n_c, dtype=np.float64)
+        # β priority temperature for Π_feasible (K=1: unused, softmax([x])=[1.0]
+        # always ⟹ K=1-preserving regardless of β; default BETA_MIN).
+        self._beta = BETA_MIN
 
         # First channel sample
         self._update_channel()
@@ -435,8 +514,14 @@ class ORANEnv(gym.Env):
         # 1. Decode action ONCE per Worker step → RRMPolicyRatios
         self._apply_action(action)
 
-        # 1b. Reset per-Worker-step constraint accumulator (aggregated across 20 MAC ticks)
-        self._worker_c_accum = np.zeros(5, dtype=np.float64)
+        # 1b. Cache PRB allocation for this step (r_min_urllc is fixed after _apply_action;
+        #     must NOT be recomputed inside _info() since state may have advanced).
+        self._last_prb_urllc, self._last_prb_embb = self._prb_allocation()
+        self._last_prb_per_amb = self._prb_split_intra_slice(self._last_prb_urllc)
+
+        # 1c. Reset per-Worker-step constraint accumulator (aggregated across 20 MAC ticks)
+        n_c = 4 * self.config.K_ambulances + 1
+        self._worker_c_accum = np.zeros(n_c, dtype=np.float64)
         self._worker_tick_count = 0
 
         # 2. Run MAC_TICKS_PER_WORKER (=20) internal MAC ticks with same action
@@ -446,21 +531,15 @@ class ORANEnv(gym.Env):
             if self.tti_idx >= self._max_tti_for_episode():
                 break  # episode truncated mid-Worker-step (rare)
 
-        # 3. Aggregate c_vec across MAC ticks → mean per-step constraint signal (5 hard)
+        # 3. Aggregate c_vec across MAC ticks → mean per-step constraint signal ((4K+1)-dim)
         if self._worker_tick_count > 0:
             self._last_c_vec = (
                 self._worker_c_accum / self._worker_tick_count
             ).astype(np.float32)
         else:
-            self._last_c_vec = np.zeros(5, dtype=np.float32)
-        # 4. Phase trajectory advance once per Worker step
-        self._advance_phase_trajectory()
-        # 5. Per-step phase threshold lookup (post-transition phase, docs/13 Phase 2.2)
-        phase_now = int(self.phase_dets[0].current_phase)
-        th = get_phase_thresholds(phase_now)
-        self._last_d_phi = np.array(
-            [th["d1"], th["d2"], th["d3"], th["d4"], th["d5"]], dtype=np.float32
-        )
+            self._last_c_vec = np.zeros(n_c, dtype=np.float32)
+        # 4. Per-step severity threshold lookup (severity fixed/episode, docs/13 Phase 2.2)
+        self._last_d_phi = build_d_phi_vector(self.severity_per_amb).astype(np.float32)
 
         terminated = False
         truncated = self.tti_idx >= self._max_tti_for_episode()
@@ -478,67 +557,87 @@ class ORANEnv(gym.Env):
         """
         # Channel + traffic arrivals
         self._update_channel()
-        n_urllc, _n_emBB = self._sample_arrivals()
+        n_urllc_per_amb, _n_emBB = self._sample_arrivals()
 
         # MAC scheduling (service rates from current PRB ratios)
         self._update_queue_service_rates()
 
-        # Queue evolution → D_e2e for any URLLC packet this TTI
-        d_e2e = self._compute_e2e_delay()
-        phase_idx = int(self.phase_dets[0].current_phase)
-        d_max_phi = float(PHASE_QOS[phase_idx]["D_max"])
-        viol = d_e2e > d_max_phi
+        # Queue evolution → D_e2e for each ambulance's URLLC stream this TTI.
+        # Per-ambulance C1/C2 violation thresholds use severity_per_amb[k]
+        # (each ambulance held to its OWN severity's QoS budget — B5 epic).
+        K = self.config.K_ambulances
+        d_e2e_per_amb = self._compute_e2e_delay_per_amb()
+        d_max_phi_per_amb = np.array(
+            [SEVERITY_QOS[int(s)]["D_max"] for s in self.severity_per_amb], dtype=np.float64
+        )
+        viol_per_amb = d_e2e_per_amb > d_max_phi_per_amb
+        d_e2e = float(np.mean(d_e2e_per_amb))     # diagnostics use the K-mean
+        viol = bool(np.mean(viol_per_amb) > 0.0)  # any-violation flag (history list)
 
         # HARQ + bookkeeping
         self.last_bler = self._sample_bler()
 
-        # eMBB throughput (Mbps) — capacity-limited when queue unstable
+        # eMBB throughput (Mbps) — capacity-limited when queue unstable.
+        # SHARED C3 quantity: R_min floor + alpha_e keyed by severity_ref
+        # (= max(severity_per_amb)), per locked design decision.
+        sev_ref = self.severity
         self.last_embb_mbps = self._compute_embb_throughput_mbps()
-        r_min_embb_phi = float(CMDP_D_J_PHI[phase_idx]["d3_embb_mbps"])
+        r_min_embb_phi = float(CMDP_D_J_SEVERITY[sev_ref]["d3_embb_mbps"])
         embb_gap_mbps = r_min_embb_phi - self.last_embb_mbps
         embb_deficit_mbps = max(0.0, embb_gap_mbps)
         c3_viol = embb_gap_mbps > 0.0
 
         # ---------------- Phase 2.1 Restructured Reward (post-critique, docs/13 §2.1) ----------------
-        # r_t = α_e(φ) · U_eMBB(t)   (eMBB log-utility ONLY)
+        # r_t = α_e(sev_ref) · U_eMBB(t)   (eMBB log-utility ONLY)
         #   U_eMBB = log(1 + R_eMBB / R_REF_EMBB_MBPS)   (bounded, R_REF = 100 Mbps)
         # URLLC enforced via Lagrangian C1, C2 in LambdaState — NOT in reward.
         # Removes double-counting with λ_1, λ_2 that caused dual stagnation (W11 audit).
         # Single-term reward: only α_eMBB is used. α_URLLC is intentionally NOT
         # applied to the reward (URLLC enforced via Lagrangian λ_1, λ_2). The
         # urllc weight is ignored here by design (post-restructure 2026-05-26).
-        _, alpha_e = get_phase_alpha(phase_idx)
+        _, alpha_e = get_severity_alpha(sev_ref)
         l_urllc = d_e2e / D_REF_URLLC                       # diagnostics only, exported via info dict
         self._last_l_urllc = float(l_urllc)
         u_embb = math.log(1.0 + self.last_embb_mbps / R_REF_EMBB_MBPS)
         reward = alpha_e * u_embb
 
         # ---------------- AoI tracking for C4, C5 (Worker-step aggregation) ----------------
-        # Aggregated vital streams = HR + SpO2 (LCFS+drop_old per docs/04)
-        aoi_max_phi = float(PHASE_QOS[phase_idx]["AoI_max_HR"])
-        eps_aoi_phi = float(PHASE_QOS[phase_idx]["eps_aoi"])
-        agg_aoi_vals = [
-            self.aoi_trackers["HR_aggregated"].current_aoi(self.sim_time),
-            self.aoi_trackers["SpO2_aggregated"].current_aoi(self.sim_time),
-        ]
-        aoi_mean_tick = float(np.mean(agg_aoi_vals)) if agg_aoi_vals else 0.0
-        aoi_tail_viol = float(np.mean([1.0 if a > aoi_max_phi else 0.0 for a in agg_aoi_vals]))
+        # Single consolidated per-ambulance AoI stream (F=1, LCFS+drop_old per docs/04),
+        # one tracker per ambulance. Per-ambulance C4/C5 thresholds use
+        # severity_per_amb[k] (B5 epic).
+        aoi_max_phi_per_amb = np.array(
+            [SEVERITY_QOS[int(s)]["AoI_max"] for s in self.severity_per_amb], dtype=np.float64
+        )
+        aoi_per_amb = np.array(
+            [t["ambulance_status"].current_aoi(self.sim_time) for t in self.aoi_trackers],
+            dtype=np.float64,
+        )
+        aoi_viol_per_amb = aoi_per_amb > aoi_max_phi_per_amb
+        aoi_mean_tick = float(np.mean(aoi_per_amb))
+        aoi_tail_viol = float(np.mean(aoi_viol_per_amb) > 0.0)
 
-        # ---------------- Per-MAC-tick c_vec accumulator (5 hard constraints) ----------------
+        # Cache per-ambulance values for _observe()'s delay_norm_k / AoI_norm_k
+        self._last_d_e2e_per_amb = d_e2e_per_amb
+        self._last_aoi_per_amb = aoi_per_amb
+
+        # ---------------- Per-MAC-tick c_vec accumulator ((4K+1)-dim, B5 epic) ----------------
         # Aggregate across MAC ticks → reported as Worker-step c_vec in info dict.
-        # c1 = mean D_e2e (seconds); c2 = tail viol fraction;
-        # c3 = signed eMBB gap R_min^phi - R_eMBB (Mbps);
-        # c4 = mean AoI (seconds); c5 = AoI tail viol fraction.
-        self._worker_c_accum[0] += float(d_e2e)
-        self._worker_c_accum[1] += float(1.0 if viol else 0.0)
-        self._worker_c_accum[2] += float(embb_gap_mbps)
-        self._worker_c_accum[3] += float(aoi_mean_tick)
-        self._worker_c_accum[4] += float(aoi_tail_viol)
+        # Layout: [C1_0..C1_{K-1}, C2_0..C2_{K-1}, C4_0..C4_{K-1}, C5_0..C5_{K-1}, C3_shared]
+        #   C1_k = D_e2e_k (seconds); C2_k = viol_k (0/1);
+        #   C4_k = AoI_k (seconds);   C5_k = AoI_viol_k (0/1);
+        #   C3_shared = signed eMBB gap R_min^sev_ref - R_eMBB (Mbps).
+        # At K=1 this is the permutation [0,1,3,4,2] of the legacy 5-dim
+        # [C1,C2,C3,C4,C5] — exact numeric preservation.
+        self._worker_c_accum[0:K] += d_e2e_per_amb
+        self._worker_c_accum[K:2 * K] += viol_per_amb.astype(np.float64)
+        self._worker_c_accum[2 * K:3 * K] += aoi_per_amb
+        self._worker_c_accum[3 * K:4 * K] += aoi_viol_per_amb.astype(np.float64)
+        self._worker_c_accum[4 * K] += embb_gap_mbps
         self._worker_tick_count += 1
 
         # State update + history
         self._advance_ambulance_positions()
-        self._update_aoi_trackers(n_urllc)
+        self._update_aoi_trackers(n_urllc_per_amb)
         self.tti_idx += 1
         self.sim_time += self.config.tti_sec
 
@@ -559,7 +658,7 @@ class ORANEnv(gym.Env):
     # ----------------------------------------------------------------
 
     def _apply_action(self, action: np.ndarray) -> None:
-        """Decode action into r_min, r_max, r_ded (and stash w_intra)."""
+        """Decode action into r_min, r_max, r_ded (and β for K>=2)."""
         a = np.asarray(action, dtype=np.float64)
         delta_r_min = float(np.clip(a[0], -1.0, 1.0)) * 0.1
         delta_r_max = float(np.clip(a[1], -1.0, 1.0)) * 0.1
@@ -567,13 +666,43 @@ class ORANEnv(gym.Env):
 
         self.r_min_urllc = float(np.clip(self.r_min_urllc + delta_r_min, 0.0, 1.0))
         self.r_max_emBB = float(np.clip(self.r_max_emBB + delta_r_max, 0.0, 1.0))
-        # Enforce r_min + r_max ≤ 1 (C6)
-        if self.r_min_urllc + self.r_max_emBB > 1.0:
-            excess = self.r_min_urllc + self.r_max_emBB - 1.0
-            self.r_max_emBB = max(0.0, self.r_max_emBB - excess)
+        self._renormalize_prb_ratios()   # enforce r_min + r_max ≤ 1 (C6)
         # C7: r_ded ≤ r_min (by design via r_ded_ratio)
         self.r_ded_urllc = min(0.2, r_ded_ratio * self.r_min_urllc)
         # w_intra stored implicitly via action; full use in Week 9
+
+        # β priority temperature (K>=2 only, B5 severity_k epic 2026-06-15):
+        # a[6] → sigmoid → [BETA_MIN, BETA_MAX], drives Π_feasible PRB split.
+        # K=1: softmax([x])=[1.0] always, so β has no numeric effect — keep
+        # at BETA_MIN for exact K=1 preservation.
+        if self.config.K_ambulances >= 2 and a.shape[0] >= 7:
+            self._beta = BETA_MIN + (BETA_MAX - BETA_MIN) * _expit(float(a[6]))
+        else:
+            self._beta = BETA_MIN
+
+    def _renormalize_prb_ratios(self) -> None:
+        """Enforce r_min_urllc + r_max_emBB ≤ 1 by trimming r_max_emBB (C6)."""
+        if self.r_min_urllc + self.r_max_emBB > 1.0:
+            excess = self.r_min_urllc + self.r_max_emBB - 1.0
+            self.r_max_emBB = max(0.0, self.r_max_emBB - excess)
+
+    def set_rrm_budget(self, b_rrm: float) -> None:
+        """Re-anchor r_min_urllc to Manager setpoint at the start of a Manager window.
+
+        Two-tier clipping:
+          1. [B_RRM_MIN, B_RRM_MAX] — guaranteed by decode_manager_action upstream.
+          2. [feasible_rrm_floor, feasible_rrm_cap] — computed at reset() per K/QoS.
+        The tighter of the two bounds applies.  For typical K=1 scenarios, tier-1 is
+        always binding; tier-2 only tightens at large K or very low SINR.
+        Must be called BEFORE the Worker loop for each Manager window.
+        """
+        lo = max(B_RRM_MIN, self._feasible_rrm_floor)
+        hi = min(B_RRM_MAX, self._feasible_rrm_cap)
+        hi = max(hi, lo)   # safety: ensure hi ≥ lo
+        clipped = float(np.clip(b_rrm, lo, hi))
+        self.r_min_urllc = clipped
+        self.r_min_urllc_anchor = clipped
+        self._renormalize_prb_ratios()
 
     def _prb_allocation(self) -> tuple[int, int]:
         prb_urllc = int(self.r_min_urllc * P_TOTAL)
@@ -603,27 +732,6 @@ class ORANEnv(gym.Env):
             sinrs, self.config.sinr_clamp_min_db, self.config.sinr_clamp_max_db
         )
 
-    def _advance_phase_trajectory(self) -> None:
-        """If a phase_trajectory is configured, fire transitions at scheduled times."""
-        traj = self.config.phase_trajectory
-        if not traj:
-            return
-        while (
-            self._trajectory_idx + 1 < len(traj)
-            and traj[self._trajectory_idx + 1][0] <= self.sim_time
-        ):
-            self._trajectory_idx += 1
-            target = Phase(traj[self._trajectory_idx][1])
-            for det in self.phase_dets:
-                event = _NEXT_PHASE_EVENT.get((det.current_phase, target))
-                if event is not None:
-                    det.trigger(event, self.sim_time)
-        # Phase entry time tracking (used by _observe() for t_phi normalization)
-        cur = int(self.phase_dets[0].current_phase)
-        if cur != self._last_observed_phase:
-            self._phase_entry_time = self.sim_time
-            self._last_observed_phase = cur
-
     def _urllc_burst_active(self) -> bool:
         bs = self.config.urllc_burst_at_sec
         if bs is None:
@@ -637,14 +745,21 @@ class ORANEnv(gym.Env):
         bler = 1.0 / (1.0 + math.exp(0.5 * (sinr - 2.0)))
         return float(np.clip(bler, 1e-4, 0.5))
 
-    def _sample_arrivals(self) -> tuple[int, int]:
-        """Sample per-TTI arrivals (Poisson) with burst + bystander spikes."""
+    def _sample_arrivals(self) -> tuple[np.ndarray, int]:
+        """Sample per-TTI arrivals (Poisson) with burst + bystander spikes.
+
+        URLLC arrivals are drawn independently per ambulance (K draws of
+        Poisson(eff_urllc_rate * tti_sec)) so each ambulance's queue/AoI
+        tracker can be fed separately — statistically equivalent in aggregate
+        to the prior single Poisson(rate*K) draw, but enables per-ambulance
+        attribution (2026-06-14 fix).
+        """
         K = self.config.K_ambulances
 
         # URLLC: apply burst factor if inside the burst window
         burst_factor = self.config.urllc_burst_factor if self._urllc_burst_active() else 1.0
         eff_urllc_rate = self.config.urllc_arrival_rate * burst_factor
-        lam_urllc_per_tti = eff_urllc_rate * self.config.tti_sec * K
+        lam_urllc_per_tti = eff_urllc_rate * self.config.tti_sec
 
         # eMBB: M_eMBB → bystander.active_ue_count(sim_time) if S2B enabled
         if self.bystander is not None:
@@ -654,20 +769,89 @@ class ORANEnv(gym.Env):
         eff_embb_total_rate = self.config.embb_arrival_rate * n_active
         lam_emBB_per_tti = eff_embb_total_rate * self.config.tti_sec
 
-        n_urllc = int(self.rng.poisson(max(lam_urllc_per_tti, 0.0)))
+        n_urllc_per_amb = self.rng.poisson(max(lam_urllc_per_tti, 0.0), size=K).astype(np.int64)
         n_emBB = int(self.rng.poisson(max(lam_emBB_per_tti, 0.0)))
 
-        # Update queue arrival-rate estimate (per-second basis)
-        self.queues["urllc"].set_arrival_rate(eff_urllc_rate * K)
+        # Update per-ambulance queue arrival-rate estimate (per-second basis)
+        for k in range(K):
+            self.queues[f"urllc_{k}"].set_arrival_rate(eff_urllc_rate)
         self.queues["eMBB"].set_arrival_rate(eff_embb_total_rate)
-        return n_urllc, n_emBB
+        return n_urllc_per_amb, n_emBB
 
     def _update_queue_service_rates(self) -> None:
+        """Split prb_urllc across K ambulances via intra-slice Π_feasible.
+
+        Each ambulance's per-PRB capacity is derived from its own SINR
+        (`self.last_sinr_db[k]`), so a worse channel ⇒ lower service rate ⇒
+        higher D_e2e_k — the signal `delay_norm_k` exposes (2026-06-14 fix).
+        eMBB stays a single pooled queue served at the cell-average SINR.
+        """
+        K = self.config.K_ambulances
         prb_urllc, prb_emBB = self._prb_allocation()
         sinr_avg = float(np.mean(self.last_sinr_db))
-        c_per_prb = capacity_per_prb_bps(sinr_avg, eta=SHANNON_ETA)
-        self.queues["urllc"].update_service_rate(prb_urllc, c_per_prb)
-        self.queues["eMBB"].update_service_rate(prb_emBB, c_per_prb)
+        c_per_prb_avg = capacity_per_prb_bps(sinr_avg, eta=SHANNON_ETA)
+
+        prb_per_amb = self._prb_split_intra_slice(prb_urllc)
+        for k in range(K):
+            c_per_prb_k = capacity_per_prb_bps(float(self.last_sinr_db[k]), eta=SHANNON_ETA)
+            self.queues[f"urllc_{k}"].update_service_rate(int(prb_per_amb[k]), c_per_prb_k)
+
+        self.queues["eMBB"].update_service_rate(prb_emBB, c_per_prb_avg)
+
+    def _prb_split_intra_slice(self, prb_urllc: int) -> np.ndarray:
+        """Intra-slice Π_feasible PRB split across K ambulances (B5 epic).
+
+        b = max(floor(κ·B_U/K), PRB_MIN_QOS); feasibility fallback b = B_U//K
+        if K·b > B_U. Remainder S = B_U - K·b is distributed via
+        w = softmax(β·severity_per_amb + δ·ũ), δ = ρ·β, where ũ is the
+        per-ambulance C1 λ_local urgency tiebreaker normalized to [0,1].
+
+        At K=1, softmax([x]) = [1.0] always ⟹ PRB_0 = b + S = B_U regardless
+        of β/severity/urgency — exact K=1 preservation.
+        """
+        K = self.config.K_ambulances
+        B_U = int(prb_urllc)
+        if K == 0:
+            return np.zeros(0, dtype=np.int64)
+
+        b = max(int(math.floor(INTRA_SLICE_KAPPA * B_U / K)), PRB_MIN_QOS)
+        if K * b > B_U:
+            b = B_U // K
+        S = B_U - K * b
+        if S <= 0:
+            return np.full(K, b, dtype=np.int64)
+
+        lam_c1 = self._lambda_local[0:K]
+        max_lam_c1 = float(np.max(lam_c1))
+        u_tilde = lam_c1 / max_lam_c1 if max_lam_c1 > 0.0 else np.zeros(K, dtype=np.float64)
+
+        beta = self._beta
+        delta = RHO_URGENCY_TIEBREAK * beta
+        logits = beta * self.severity_per_amb.astype(np.float64) + delta * u_tilde
+        w = _softmax(logits)
+
+        shares = np.floor(S * w).astype(np.int64)
+        remainder = S - int(shares.sum())
+        if remainder > 0:
+            fracs = S * w - shares
+            order = np.argsort(-fracs)
+            for i in range(remainder):
+                shares[order[i % K]] += 1
+
+        return np.full(K, b, dtype=np.int64) + shares
+
+    def set_lambda_local(self, lambda_local: np.ndarray) -> None:
+        """Store the (4K+1,)-dim λ_local vector (B5 epic, 2026-06-15).
+
+        Called by train.py / solver drivers each Worker step. Feeds both
+        _observe()'s per-ambulance + shared λ_local slots and the
+        Π_feasible urgency tiebreaker in _prb_split_intra_slice().
+        """
+        K = self.config.K_ambulances
+        arr = np.asarray(lambda_local, dtype=np.float64)
+        if arr.shape != (4 * K + 1,):
+            raise ValueError(f"lambda_local shape {arr.shape} != ({4 * K + 1},)")
+        self._lambda_local = arr
 
     def _compute_embb_throughput_mbps(self) -> float:
         """eMBB realized throughput in Mbps.
@@ -681,29 +865,34 @@ class ORANEnv(gym.Env):
         served_pkts_per_sec = min(q.arrival_rate, q.service_rate)
         return served_pkts_per_sec * q.mean_packet_bits / 1e6
 
-    def _compute_e2e_delay(self) -> float:
-        """Return current mean D_e2e for URLLC slice in this TTI."""
-        q = self.queues["urllc"]
-        if not q.is_stable:
-            return float(PHASE_QOS[3]["D_max"]) * 2.0   # clamp at 2× D_max if unstable
-
-        hol = q.hol_delay()                            # ~queue + service
-        d_tx = q.mean_service_time - D_STOCH           # subtract stoch component
-        d_queue = q.expected_queue_delay()
-        d_e2e = D_DET + d_tx + d_queue + D_FH + D_BH
-        return float(d_e2e)
+    def _compute_e2e_delay_per_amb(self) -> np.ndarray:
+        """Return current D_e2e (s) per ambulance's URLLC queue, shape (K,)."""
+        K = self.config.K_ambulances
+        d_e2e = np.empty(K, dtype=np.float64)
+        for k in range(K):
+            q = self.queues[f"urllc_{k}"]
+            if not q.is_stable:
+                d_e2e[k] = float(SEVERITY_QOS[5]["D_max"]) * 2.0   # clamp at 2× tightest D_max if unstable
+                continue
+            d_tx = q.mean_service_time - D_STOCH        # subtract stoch component
+            d_queue = q.expected_queue_delay()
+            d_e2e[k] = D_DET + d_tx + d_queue + D_FH + D_BH
+        return d_e2e
 
     # ----------------------------------------------------------------
     # AoI + position
     # ----------------------------------------------------------------
 
-    def _update_aoi_trackers(self, n_urllc: int) -> None:
-        """Inject one HR + one SpO2 sample per TTI if URLLC traffic arrives."""
-        if n_urllc <= 0:
-            return
-        for sid in self.aoi_trackers:
-            self.aoi_trackers[sid].arrive(gen_time=self.sim_time)
-            self.aoi_trackers[sid].deliver_next(sim_time=self.sim_time + self.config.tti_sec)
+    def _update_aoi_trackers(self, n_urllc_per_amb: np.ndarray) -> None:
+        """Inject one consolidated status sample per ambulance per TTI if its
+        URLLC traffic arrives this tick (one tracker dict per ambulance,
+        2026-06-14 fix)."""
+        for k in range(self.config.K_ambulances):
+            if n_urllc_per_amb[k] <= 0:
+                continue
+            for sid, tracker in self.aoi_trackers[k].items():
+                tracker.arrive(gen_time=self.sim_time)
+                tracker.deliver_next(sim_time=self.sim_time + self.config.tti_sec)
 
     def _advance_ambulance_positions(self) -> None:
         self.ambulance_pos = self.ambulance_pos + self.ambulance_vel * self.config.tti_sec
@@ -718,49 +907,59 @@ class ORANEnv(gym.Env):
     # ----------------------------------------------------------------
 
     def _observe(self) -> np.ndarray:
-        """Return Phase 1.2 formal Worker state s_t^L (33-dim for K=1, F=4).
+        """Return formal Worker state s_t^L (31-dim for K=1, F=1).
 
-        Layout (matches docs/13 Phase 1.2 — LSTM + MEC removed, B0/B0b):
-            == Fixed 26-dim block ==
+        Layout (per-ambulance severity_k epic, B5, 2026-06-15):
+            == Fixed 20-dim block ==
             [0:2]   Q_urllc, Q_eMBB                      (queue arrival rates, normalized)
             [2:4]   HOL_urllc, HOL_eMBB                   (head-of-line delay, ms)
             [4:7]   r_min^URLLC, r_max^eMBB, r_ded^URLLC  (PRB ratios)
             [7:9]   arr_rate_urllc, arr_rate_eMBB         (per-second rate, normalized)
             [9]     mean BLER
-            [10:15] phase one-hot (φ_1..φ_5)
-            [15]    t_phi (normalized time elapsed in current phase)
-            [16]    ETA_next (s, normalized; 0 if unknown)
-            [17:22] λ_local (5 hard constraints)
-            [22]    rrm_budget hint (Manager → Worker)
-            [23]    n_bys (active bystander UE count, normalized by M_eMBB)
-            [24:26] mean AoI + max AoI (s, across F streams)
-            == 3K per-ambulance block ==
-            [26:26+K]      SINR_k (dB normalized)
-            [26+K:26+2K]   d_k (distance to serving O-RU, normalized by cell_radius)
-            [26+2K:26+3K]  v_k (speed m/s, normalized by 60 m/s)
+            [10:15] severity_ref one-hot (levels 1..5 NON_URGENT..IMMEDIATE,
+                    severity_ref = max(severity_per_amb))
+            [15]    λ_local for shared C3 (eMBB throughput floor)
+            [16]    rrm_budget hint (Manager → Worker)
+            [17]    n_bys (active bystander UE count, normalized by M_eMBB)
+            [18:20] mean AoI + max AoI (s, across K ambulances × F streams)
+            == 10K per-ambulance block (interleaved per k) ==
+            For each k in 0..K-1, 10 contiguous dims:
+              SINR_k, d_k, v_k, delay_norm_k, AoI_norm_k, severity_k_norm,
+              λC1_k, λC2_k, λC4_k, λC5_k
+            where delay_norm_k = D_e2e_k / D_max^{sev_k}, AoI_norm_k =
+            AoI_k / AoI_max^{sev_k} (per-ambulance severity thresholds),
+            severity_k_norm = severity_per_amb[k] / 5.0, and λC*_k are the
+            per-ambulance Lagrangian multipliers from set_lambda_local().
             == F per-stream block ==
-            [26+3K:26+3K+F]  AoI per stream (s)
+            [20+10K:20+10K+F]  AoI per stream (s), mean over K — F=1, the
+                               consolidated "ambulance_status" stream
 
         Normalisations chosen to keep components O(1) for PPO stability.
+        At K=1, this layout reduces to exactly the pre-redesign scalar
+        values via the documented [0,1,3,4,2] permutation (no numeric
+        change to existing K=1 behaviour).
         """
         K = self.config.K_ambulances
         F = self.config.num_streams
-        phase_idx = int(self.phase_dets[0].current_phase)
-        phase_oh = np.zeros(5, dtype=np.float32)
-        phase_oh[phase_idx - 1] = 1.0
-        aoi_vec = np.array(
-            [t.current_aoi(self.sim_time) for t in self.aoi_trackers.values()],
-            dtype=np.float32,
-        )
+        sev_oh = np.zeros(5, dtype=np.float32)
+        sev_oh[self.severity - 1] = 1.0
 
-        # Queue load: utilization ρ = λ/μ ∈ [0, 1] (NOT duplicate of arrival rate)
-        rho_urllc = float(np.clip(self.queues["urllc"].rho, 0.0, 1.0))
+        # Queue load: utilization ρ = λ/μ ∈ [0, 1], mean over K URLLC queues
+        # (NOT duplicate of arrival rate). Identical to old scalar at K=1.
+        rho_urllc = float(np.clip(
+            np.mean([self.queues[f"urllc_{k}"].rho for k in range(K)]), 0.0, 1.0
+        ))
         rho_emBB = float(np.clip(self.queues["eMBB"].rho, 0.0, 1.0))
-        # Arrival rates (per second, normalized differently from ρ)
-        arr_urllc = float(self.queues["urllc"].arrival_rate) / 1e3
+        # Arrival rates (per second, normalized differently from ρ).
+        # arr_urllc = sum over K ambulances (total system rate, K=1-identical).
+        arr_urllc = float(sum(self.queues[f"urllc_{k}"].arrival_rate for k in range(K))) / 1e3
         arr_emBB = float(self.queues["eMBB"].arrival_rate) / 1e4
         # Clip HOL: unstable queue returns +inf; cap at sane upper bounds.
-        hol_urllc_ms = min(float(self.queues["urllc"].hol_delay()) * 1e3, 100.0)
+        # Mean over K URLLC queues (identical to old scalar at K=1).
+        hol_urllc_ms = min(
+            float(np.mean([self.queues[f"urllc_{k}"].hol_delay() for k in range(K)])) * 1e3,
+            100.0,
+        )
         hol_emBB_ms = min(float(self.queues["eMBB"].hol_delay()) * 1e3, 1000.0)
 
         # PRB ratios (Phase 1.1: r_min, r_max, r_ded directly — KHÔNG split per slice)
@@ -769,84 +968,133 @@ class ORANEnv(gym.Env):
             dtype=np.float32,
         )
 
-        # Time-in-phase (normalized by episode duration as proxy)
-        phase_elapsed = self.sim_time - self._phase_entry_time
-        t_phi = float(np.clip(phase_elapsed / self.config.episode_duration_sec, 0.0, 1.0))
-
-        # ETA to next phase transition (0 if unknown / no trajectory)
-        eta_next = self._compute_eta_next()
-        eta_next_norm = float(np.clip(eta_next, 0.0, 10.0)) / 10.0  # clip 10s, normalize
-
         # Bystander UE count (normalized by baseline M_eMBB)
         if self.bystander is not None:
             n_bys = float(self.bystander.active_ue_count(self.sim_time)) / max(self.config.M_eMBB, 1)
         else:
             n_bys = 1.0  # baseline M_eMBB → ratio 1.0
 
-        # AoI summary (mean + max across F streams)
-        aoi_mean = float(aoi_vec.mean()) if aoi_vec.size > 0 else 0.0
-        aoi_max = float(aoi_vec.max()) if aoi_vec.size > 0 else 0.0
+        # AoI per ambulance for the consolidated "ambulance_status" stream
+        # (one tracker dict per ambulance, 2026-06-14 fix).
+        aoi_per_amb = np.array(
+            [t["ambulance_status"].current_aoi(self.sim_time) for t in self.aoi_trackers],
+            dtype=np.float64,
+        )
+        # AoI summary (mean + max over K ambulances × F=1 stream — identical
+        # to old scalar at K=1).
+        aoi_mean = float(aoi_per_amb.mean()) if aoi_per_amb.size > 0 else 0.0
+        aoi_max = float(aoi_per_amb.max()) if aoi_per_amb.size > 0 else 0.0
 
-        # Per-ambulance kinematics (sinr already cached, recompute distance + speed)
+        # Per-ambulance kinematics (sinr already cached, recompute distance + speed).
+        # NB: v_k (speed) is now the sole signal distinguishing on-scene (v≈0) vs
+        # in-transport (v high) mobility — phase one-hot no longer carries it.
         sinr_norm = self.last_sinr_db.astype(np.float32) / 40.0     # [-10, 40] dB → [-0.25, 1.0]
         amb_dist = np.linalg.norm(self.ambulance_pos, axis=1) / max(self.config.cell_radius_m, 1.0)
         amb_speed = np.linalg.norm(self.ambulance_vel, axis=1) / 60.0  # normalize by 60 m/s cap
 
+        # Per-ambulance proximity to QoS violation, using each ambulance's OWN
+        # severity_k threshold (B5 epic 2026-06-15) — dimensionless ratios that
+        # hit ~1.0 at the violation boundary, comparable across ambulances even
+        # when severity_k differs.
+        d_max_phi_per_amb = np.array(
+            [SEVERITY_QOS[int(s)]["D_max"] for s in self.severity_per_amb], dtype=np.float64
+        )
+        aoi_max_phi_per_amb = np.array(
+            [SEVERITY_QOS[int(s)]["AoI_max"] for s in self.severity_per_amb], dtype=np.float64
+        )
+        delay_norm = (self._last_d_e2e_per_amb / d_max_phi_per_amb).astype(np.float32)
+        aoi_norm = (self._last_aoi_per_amb / aoi_max_phi_per_amb).astype(np.float32)
+        severity_k_norm = (self.severity_per_amb.astype(np.float32) / 5.0)
+
+        # Per-ambulance Lagrangian multipliers from set_lambda_local(), laid
+        # out as [C1_0..C1_{K-1}, C2_0..C2_{K-1}, C4_0..C4_{K-1}, C5_0..C5_{K-1}, C3_shared].
+        lam = self._lambda_local
+        lam_c1 = lam[0:K]
+        lam_c2 = lam[K:2 * K]
+        lam_c4 = lam[2 * K:3 * K]
+        lam_c5 = lam[3 * K:4 * K]
+        lam_c3_shared = float(lam[4 * K])
+
+        # F per-stream block (F=1): mean over K ambulances of the consolidated
+        # "ambulance_status" AoI — identical to the old aoi_vec at K=1.
+        aoi_stream_vec = np.full(F, aoi_mean, dtype=np.float32)
+
+        # 10K per-amb block, INTERLEAVED per k:
+        # [SINR_k, d_k, v_k, delay_norm_k, AoI_norm_k, severity_k_norm,
+        #  λC1_k, λC2_k, λC4_k, λC5_k]
+        per_amb = np.stack(
+            [
+                sinr_norm,
+                amb_dist.astype(np.float32),
+                amb_speed.astype(np.float32),
+                delay_norm,
+                aoi_norm,
+                severity_k_norm,
+                lam_c1.astype(np.float32),
+                lam_c2.astype(np.float32),
+                lam_c4.astype(np.float32),
+                lam_c5.astype(np.float32),
+            ],
+            axis=1,
+        ).reshape(-1)
+
         obs = np.concatenate(
             [
-                # === Fixed 33-dim block ===
+                # === Fixed 20-dim block ===
                 np.array([rho_urllc, rho_emBB,                       # [0:2] queue utilization
                           hol_urllc_ms, hol_emBB_ms], dtype=np.float32),  # [2:4] HOL ms
                 prb_ratios,                                          # [4:7] r_min, r_max, r_ded
                 np.array([arr_urllc, arr_emBB,                       # [7:9] arrival rates
                           float(self.last_bler)], dtype=np.float32), # [9]   BLER
-                phase_oh,                                            # [10:15] phase one-hot
-                np.array([t_phi, eta_next_norm], dtype=np.float32),  # [15:17]
-                np.asarray(self.config.lambda_local, dtype=np.float32),  # [17:22] λ_local
-                np.array([self.config.rrm_budget_hint, n_bys,        # [22:24]
-                          aoi_mean, aoi_max], dtype=np.float32),     # [24:26]
-                # === 3K per-amb block ===
-                sinr_norm,                                           # [26:26+K]   SINR
-                amb_dist.astype(np.float32),                         # [26+K:26+2K] distance
-                amb_speed.astype(np.float32),                        # [26+2K:26+3K] speed
+                sev_oh,                                              # [10:15] severity_ref one-hot
+                np.array([lam_c3_shared], dtype=np.float32),         # [15]    λ_local shared C3
+                np.array([self.r_min_urllc_anchor, n_bys,            # [16:20] Manager anchor, n_bys,
+                          aoi_mean, aoi_max], dtype=np.float32),     #         mean AoI, max AoI
+                # === 10K per-amb block ===
+                per_amb,                                             # [20:20+10K]
                 # === F per-stream block ===
-                aoi_vec,                                             # [26+3K:26+3K+F]
+                aoi_stream_vec,                                      # [20+10K:20+10K+F]
             ]
         )
         # Final safety: replace any residual NaN/inf with 0
         return np.nan_to_num(obs.astype(np.float32), nan=0.0, posinf=1e3, neginf=-1e3)
 
-    def _compute_eta_next(self) -> float:
-        """ETA (seconds) until next phase transition. Returns 0 if unknown."""
-        traj = self.config.phase_trajectory
-        if not traj or self._trajectory_idx < 0:
-            return 0.0
-        next_idx = self._trajectory_idx + 1
-        if next_idx >= len(traj):
-            return 0.0
-        return max(0.0, float(traj[next_idx][0]) - self.sim_time)
-
     def _info(self) -> dict[str, Any]:
-        phase_idx = int(self.phase_dets[0].current_phase)
+        K = self.config.K_ambulances
+        d_max_phi_per_amb = np.array(
+            [SEVERITY_QOS[int(s)]["D_max"] for s in self.severity_per_amb], dtype=np.float64
+        )
+        aoi_max_phi_per_amb = np.array(
+            [SEVERITY_QOS[int(s)]["AoI_max"] for s in self.severity_per_amb], dtype=np.float64
+        )
         return {
             "tti": self.tti_idx,
             "sim_time": self.sim_time,
-            "phase": phase_idx,
-            "phase_name": Phase(phase_idx).name,
-            "phase_now": phase_idx,                      # alias for docs/13 compatibility
+            # severity = severity_ref = max(severity_per_amb), drives SHARED
+            # quantities (alpha_e reward weight, C3 R_min, fixed-block one-hot).
+            "severity": self.severity,
+            "severity_name": SEVERITY_QOS[self.severity]["name"],
+            # severity_per_amb[k] = independent severity_k in {1..5}, fixed for
+            # the episode (B5 epic 2026-06-15).
+            "severity_per_amb": self.severity_per_amb.copy(),
             "r_min_urllc": self.r_min_urllc,
             "r_max_eMBB": self.r_max_emBB,
             "r_ded_urllc": self.r_ded_urllc,
             "sinr_db": float(np.mean(self.last_sinr_db)),
             "mean_BLER": self.last_bler,
-            "urllc_stable": self.queues["urllc"].is_stable,
+            # All K per-ambulance URLLC queues stable (C12 semantics; identical
+            # to old scalar at K=1).
+            "urllc_stable": all(self.queues[f"urllc_{k}"].is_stable for k in range(K)),
             "eMBB_stable": self.queues["eMBB"].is_stable,
-            # Phase 2.2.1 — 5 hard constraint signals aggregated per Worker step
-            # c_vec[0] = mean D_e2e (s)         | d_phi[0] = D_max^φ (s)
-            # c_vec[1] = URLLC tail viol frac    | d_phi[1] = ε^φ
-            # c_vec[2] = signed eMBB gap (Mbps) | d_phi[2] = 0
-            # c_vec[3] = mean AoI (s, agg)       | d_phi[3] = AoI_max^φ_HR (s)
-            # c_vec[4] = AoI tail viol frac      | d_phi[4] = ε_AoI^φ
+            # (4K+1)-dim hard constraint signals aggregated per Worker step
+            # (B5 epic 2026-06-15). Layout:
+            # c_vec[0:K]      = D_e2e_k (s)          | d_phi[0:K]      = D_max^{sev_k} (s)
+            # c_vec[K:2K]     = URLLC tail viol_k     | d_phi[K:2K]     = ε^{sev_k}
+            # c_vec[2K:3K]    = AoI_k (s)             | d_phi[2K:3K]    = AoI_max^{sev_k} (s)
+            # c_vec[3K:4K]    = AoI tail viol_k       | d_phi[3K:4K]    = ε_AoI^{sev_k}
+            # c_vec[4K]       = signed eMBB gap (Mbps)| d_phi[4K]       = 0
+            # At K=1 this is exactly the old [C1,C2,C3,C4,C5] under the
+            # permutation [0,1,3,4,2].
             "c_vec": self._last_c_vec.copy(),
             "d_phi": self._last_d_phi.copy(),
             # Phase 2.1 reward restructure (post-critique W12): URLLC mean delay
@@ -857,8 +1105,23 @@ class ORANEnv(gym.Env):
             # so reviewers can audit Pollaczek-Khinchine formula application.
             # Returns dict {lambda, mu, rho, E_S, E_S2, E_D_queue, HOL, stable}.
             # See docs/13 §1.3 service-time distribution + env/queue_model.py:62-73.
-            "queue_diag_urllc": self.queues["urllc"].summary(),
+            # queue_diag_urllc = ambulance-0's queue (backward-compat shape;
+            # identical to the old pooled queue at K=1).
+            "queue_diag_urllc": self.queues["urllc_0"].summary(),
             "queue_diag_embb": self.queues["eMBB"].summary(),
+            # Per-ambulance diagnostics: one queue summary, delay_norm, AoI_norm
+            # per ambulance (using each ambulance's OWN severity_k threshold,
+            # B5 epic 2026-06-15) — lets reviewers/policies audit per-ambulance
+            # proximity to QoS violation when severity_k differs.
+            "queue_diag_urllc_per_amb": [self.queues[f"urllc_{k}"].summary() for k in range(K)],
+            "delay_norm_per_amb": (self._last_d_e2e_per_amb / d_max_phi_per_amb).astype(np.float32),
+            "aoi_norm_per_amb": (self._last_aoi_per_amb / aoi_max_phi_per_amb).astype(np.float32),
+            # Manager setpoint anchor and PRB breakdown — read from step() cache,
+            # never recomputed here (both functions are not pure).
+            "r_min_urllc_anchor": self.r_min_urllc_anchor,
+            "prb_urllc": self._last_prb_urllc,
+            "prb_embb": self._last_prb_embb,
+            "prb_per_amb": self._last_prb_per_amb.tolist(),
         }
 
     # ----------------------------------------------------------------

@@ -1,14 +1,19 @@
 """Worker agent (xApp π_L) for PPO.
 
-Phase 3.3.3 / 3.3.4: low-level policy operating on full Worker state (33-dim
-for K=1, F=4) every Worker step (T_L = 10 ms sim = 20 MAC ticks).
+Phase 3.3.3 / 3.3.4: low-level policy operating on full Worker state
+(obs_dim = 20 + 10K + F; 31-dim for K=1, F=1 — per-ambulance severity_k epic
+2026-06-15, exposes delay_norm_k, AoI_norm_k, severity_k_norm and per-amb
+λ_local slots) every Worker step (T_L = 10 ms sim = 20 MAC ticks).
 
-Output action dimensions (Phase 2.3.2):
-    a_L = (Δr_min, Δr_max, r_ded_ratio, w_intra^C1, w_intra^C2, w_intra^C3)
-    6-dim continuous. Decoded via per-component squashing:
+Output action dimensions (Phase 2.3.2, extended B5 2026-06-15):
+    a_L = (Δr_min, Δr_max, r_ded_ratio, w_intra^C1, w_intra^C2, w_intra^C3[, β])
+    6-dim continuous for K=1 (unchanged), 7-dim for K>=2 (adds β priority
+    temperature for the Π_feasible intra-slice PRB split). Decoded via
+    per-component squashing:
         Δr_min, Δr_max ∈ [-0.1, +0.1]    (0.1 · tanh)
         r_ded_ratio    ∈ [0, 1]          (sigmoid; r_ded = r_ded_ratio · r_min)
         w_intra^C1..C3 ∈ Δ³ simplex       (softmax)
+        β (K>=2 only) ∈ [BETA_MIN, BETA_MAX]  (sigmoid)
 
 Reference:
     - docs/13_methodology_walkthrough.md Phase 3.3.3 (Worker arch)
@@ -26,6 +31,8 @@ from torch.distributions import Normal
 
 from agents.ppo_core import compute_gae, entropy_bonus, ppo_clip_loss, value_loss
 from utils.config import (
+    BETA_MAX,
+    BETA_MIN,
     GAE_LAMBDA,
     GAMMA_WORKER,
     LR_PI_L,
@@ -35,13 +42,15 @@ from utils.config import (
     PPO_K_EPOCHS,
 )
 
-WORKER_STATE_DIM_DEFAULT: int = 33
-WORKER_ACTION_DIM_DEFAULT: int = 6
-# Component indices in the 6-dim raw action vector
+WORKER_STATE_DIM_DEFAULT: int = 31   # 20 + 10K + F for K=1, F=1 (B5 severity_k epic 2026-06-15)
+WORKER_ACTION_DIM_DEFAULT: int = 6   # K=1 (unchanged); K>=2 uses WORKER_ACTION_DIM_K2PLUS=7 (adds beta)
+WORKER_ACTION_DIM_K2PLUS: int = 7
+# Component indices in the raw action vector
 IDX_DELTA_R_MIN: int = 0
 IDX_DELTA_R_MAX: int = 1
 IDX_R_DED_RATIO: int = 2
 IDX_W_INTRA_START: int = 3   # w_intra^C1, w_intra^C2, w_intra^C3 (indices 3..5)
+IDX_BETA: int = 6            # beta priority temperature (K>=2 only)
 DELTA_R_SCALE: float = 0.1   # Δr_min, Δr_max bound (Phase 2.3.2)
 
 
@@ -96,15 +105,20 @@ class WorkerCritic(nn.Module):
 
 
 def decode_worker_action(a_raw: np.ndarray) -> dict[str, float | np.ndarray]:
-    """Squash 6-dim raw Gaussian sample → physical Worker action.
+    """Squash 6- or 7-dim raw Gaussian sample → physical Worker action.
 
     Δr_min, Δr_max  →  0.1 · tanh(raw)
     r_ded_ratio     →  sigmoid(raw)
     w_intra^C1..C3  →  softmax over (raw_3, raw_4, raw_5)
+    β (7-dim only)  →  BETA_MIN + (BETA_MAX-BETA_MIN) · sigmoid(raw_6)
+
+    For 6-dim input (K=1), "beta" is omitted from the result.
     """
     a = np.asarray(a_raw, dtype=np.float32)
-    if a.shape != (WORKER_ACTION_DIM_DEFAULT,):
-        raise ValueError(f"a_raw shape {a.shape} != ({WORKER_ACTION_DIM_DEFAULT},)")
+    if a.shape not in ((WORKER_ACTION_DIM_DEFAULT,), (WORKER_ACTION_DIM_K2PLUS,)):
+        raise ValueError(
+            f"a_raw shape {a.shape} != ({WORKER_ACTION_DIM_DEFAULT},) or ({WORKER_ACTION_DIM_K2PLUS},)"
+        )
     d_r_min = float(DELTA_R_SCALE * np.tanh(a[IDX_DELTA_R_MIN]))
     d_r_max = float(DELTA_R_SCALE * np.tanh(a[IDX_DELTA_R_MAX]))
     r_ded_ratio = float(1.0 / (1.0 + np.exp(-a[IDX_R_DED_RATIO])))
@@ -112,12 +126,15 @@ def decode_worker_action(a_raw: np.ndarray) -> dict[str, float | np.ndarray]:
     logits = logits - logits.max()  # numerical stability
     exp = np.exp(logits)
     w_intra = (exp / exp.sum()).astype(np.float32)
-    return {
+    out: dict[str, float | np.ndarray] = {
         "delta_r_min": d_r_min,
         "delta_r_max": d_r_max,
         "r_ded_ratio": r_ded_ratio,
         "w_intra": w_intra,           # shape (3,), simplex
     }
+    if a.shape[0] == WORKER_ACTION_DIM_K2PLUS:
+        out["beta"] = float(BETA_MIN + (BETA_MAX - BETA_MIN) / (1.0 + np.exp(-a[IDX_BETA])))
+    return out
 
 
 class WorkerAgent:

@@ -95,7 +95,7 @@ class TestORANEnvAPI:
         obs, info = env.reset(seed=0)
         assert obs.shape == env.observation_space.shape
         assert obs.dtype == np.float32
-        assert "phase" in info
+        assert "severity" in info
         assert "r_min_urllc" in info
 
     def test_step_returns_5tuple(self):
@@ -201,7 +201,7 @@ class TestQueueStability:
             config=EnvConfig(
                 urllc_arrival_rate=50.0,
                 rrm_budget_hint=0.6,
-                initial_phase=3,
+                initial_severity=3,
             ),
             seed=0,
         )
@@ -209,7 +209,7 @@ class TestQueueStability:
         # Hold the action ≈ zero (keep ratios)
         for _ in range(50):
             env.step(np.zeros(env.action_space.shape, dtype=np.float32))
-        assert env.queues["urllc"].is_stable
+        assert env.queues["urllc_0"].is_stable
 
     def test_urllc_overloaded_if_no_prb(self):
         from env.oran_env import EnvConfig, ORANEnv
@@ -222,7 +222,7 @@ class TestQueueStability:
         for _ in range(10):
             env.step(np.array([-1.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32))
         # We can't guarantee unstable but rho should be much higher
-        rho_low_prb = env.queues["urllc"].rho
+        rho_low_prb = env.queues["urllc_0"].rho
 
         env2 = ORANEnv(
             config=EnvConfig(urllc_arrival_rate=50.0, rrm_budget_hint=0.6),
@@ -231,7 +231,7 @@ class TestQueueStability:
         env2.reset(seed=0)
         for _ in range(10):
             env2.step(np.zeros(env2.action_space.shape, dtype=np.float32))
-        rho_high_prb = env2.queues["urllc"].rho
+        rho_high_prb = env2.queues["urllc_0"].rho
         assert rho_low_prb > rho_high_prb
 
 
@@ -249,7 +249,7 @@ class TestGateP2:
 
         env = ORANEnv(
             config=EnvConfig(
-                initial_phase=3,
+                initial_severity=3,
                 K_ambulances=1,
                 M_eMBB=30,
                 urllc_arrival_rate=50.0,
@@ -274,7 +274,7 @@ class TestGateP2:
         # Sanity assertions — should be roughly:
         # D_det 0.07 + D_tx ~0.3 + D_queue ~0.2 + D_fh 0.1 + D_bh 0.1 ≈ 0.7-0.9 ms
         assert mean_e2e_ms < 1.0, f"Gate P2 FAIL: mean D_e2e = {mean_e2e_ms:.3f}ms > 1ms"
-        assert env.queues["urllc"].is_stable, "URLLC queue unstable at φ₃"
+        assert env.queues["urllc_0"].is_stable, "URLLC queue unstable at φ₃"
         # Per-TTI violation rate should be low (allow up to 20% during warm-up)
         assert viol_rate < 0.30, f"viol_rate {viol_rate:.3f} too high"
         # PRB budget honored
@@ -290,7 +290,7 @@ class TestGateP2:
         from utils.config import D_DET, D_FH, D_BH
 
         env = ORANEnv(
-            config=EnvConfig(initial_phase=3, rrm_budget_hint=0.6, urllc_arrival_rate=50.0),
+            config=EnvConfig(initial_severity=3, rrm_budget_hint=0.6, urllc_arrival_rate=50.0),
             seed=42,
         )
         env.reset(seed=42)
@@ -298,7 +298,7 @@ class TestGateP2:
         for _ in range(100):
             env.step(a)
 
-        urllc = env.queues["urllc"]
+        urllc = env.queues["urllc_0"]
         d_queue = urllc.expected_queue_delay()
         d_tx = urllc.mean_service_time
         d_components = D_DET + d_tx + d_queue + D_FH + D_BH
