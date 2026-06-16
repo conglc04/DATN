@@ -3,7 +3,7 @@
 > **Pha**: GĐ A (code foundation) · **Status**: ✅ DONE · **Gate**: G3.3 — mitigations tested + budget locked · **Deps**: W09/G3
 
 ## Đã xây / verify
-- `--ent-coef` CLI flag; ent_coef sweep + α_λ sweep (ổn định seed khó).
+- `--worker-ent-coef` + `--manager-ent-coef` CLI flags (tách riêng Worker/Manager; audit 2026-06-16 — wired vào agent qua `ent_coef=`); ent_coef sweep + α_λ sweep (ổn định seed khó).
 - Wall-clock per-run đo + logging spec finalize cho experiment đa-seed.
 
 ## Gate G3.3 ✅

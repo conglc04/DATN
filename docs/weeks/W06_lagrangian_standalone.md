@@ -5,7 +5,7 @@
 ## Đã xây
 - `agents/lagrangian.py` — `LambdaState`: dual ascent `λ_c ← clip(λ_c + α_λ·g_c, 0, Λ_max)`, `α_λ=1e-4`, `Λ_max=10` [Spoor 2025; Ding 2023].
 - `λ_warm` EMA bridge (rApp 1s gap): init λ từ `LAMBDA_WARM[phase]` (W06-era; nay `λ_warm[severity_per_amb]` qua `build_lambda_warm_vector`, slot C3_shared dùng `severity_ref`), EMA flush ở **biên episode** (`on_episode_end`) — severity cố định/episode ⟹ KHÔNG transition trong-episode (swap 2026-06-14).
-- `tests/test_lagrangian.py` (20 unit tests).
+- `tests/test_lagrangian.py` (26 unit tests; audit 2026-06-16 — tăng từ 20 sau K-aware (4K+1)-dim).
 
 ## Sửa (audit post-cleanup)
 - ⚠️ Nguồn dual ascent = **Spoor/Ding** (corpus); **KHÔNG** dùng Boyd/Tessler làm ✅ (vắng corpus). Disclaimer weak-duality (no zero-duality-gap) — [W17](W17_pha2_cmdp_formulation.md)/P4.2.
