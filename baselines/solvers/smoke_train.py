@@ -24,6 +24,12 @@ from agents.manager_agent import decode_manager_action
 from agents.ppo_agent import RolloutBuffer
 from env.oran_env import EnvConfig, ORANEnv
 from solvers._common import _manager_act, build_manager_state
+from utils.checkpointing import (
+    latest_ckpt_path,
+    load_train_state,
+    save_train_state,
+    state_path,
+)
 from utils.config import WORKER_STEPS_PER_MANAGER
 from utils.early_stopping import EarlyStopping
 from utils.logger import Logger
@@ -67,8 +73,9 @@ def train(
     early_stop_window: int = 100,
     early_stop_min_ep: int = 500,
     eval_at: int = 5000,
-    resume_checkpoint: str | None = None,  # path to .pt file to resume from
+    resume_checkpoint: str | None = None,  # path to .pt file to resume from (explicit)
     resume_start_ep: int = 0,              # episode offset (metrics append after this ep)
+    resume: bool = False,                  # auto-resume from rolling *_latest.pt
 ) -> dict:
     if enforce_c3:
         import warnings
@@ -91,17 +98,32 @@ def train(
     K = env.config.K_ambulances
     agent = make_baseline(baseline_name, state_dim, action_dim, seed, device=device, K=K)
 
-    # Resume from checkpoint if provided
+    # --- Resume: explicit path wins; else auto-resume from rolling latest ---
+    ckpt_dir = Path(checkpoint_dir)
+    latest = latest_ckpt_path(ckpt_dir, baseline_name, seed)
+    state_file = state_path(ckpt_dir, baseline_name, seed)
     if resume_checkpoint is not None:
         agent.load(resume_checkpoint)
         print(f"[{baseline_name}] Resumed from {resume_checkpoint} (start_ep={resume_start_ep})")
+    elif resume:
+        st = load_train_state(state_file)
+        if st is not None and latest.exists():
+            if int(st.get("seed", seed)) != seed:
+                raise ValueError(
+                    f"Resume seed mismatch: state seed={st.get('seed')} != run seed={seed}"
+                )
+            agent.load(str(latest))
+            resume_start_ep = int(st["last_ep"])
+            print(f"[{baseline_name}] RESUME from ep {resume_start_ep} (latest, seed={seed})")
+        else:
+            print(f"[{baseline_name}] --resume requested but no latest at {state_file} — starting fresh")
 
     logger = Logger(
         run_name=f"smoke_{baseline_name}_seed{seed}",
         log_dir=log_dir,
         use_tensorboard=False,
         use_wandb=use_wandb,
-        append_csv=(resume_checkpoint is not None),
+        append_csv=(resume_checkpoint is not None or resume_start_ep > 0),
     )
     logger.log_hparams({
         "baseline": baseline_name,
@@ -142,7 +164,12 @@ def train(
     episode_rewards = []
     final_stats: dict = {}
 
-    for ep in range(n_episodes):
+    # Auto-resume treats n_episodes as the TARGET total → run only the remaining.
+    # Manual resume_checkpoint keeps offset semantics (n_episodes = increment;
+    # required by run_30runs.py). Fresh run: n_iters == n_episodes.
+    n_iters = max(0, n_episodes - resume_start_ep) if (resume and resume_checkpoint is None) else n_episodes
+
+    for ep in range(n_iters):
         global_ep = ep + resume_start_ep   # absolute episode index for logging
         obs, info = env.reset(seed=seed + global_ep)
         if buffer is not None:
@@ -318,7 +345,7 @@ def train(
             "c3_viol_rate": env.c3_violation_rate(),
         }
 
-        if checkpoint_every > 0 and ((ep + 1) % checkpoint_every == 0 or ep == n_episodes - 1):
+        if checkpoint_every > 0 and ((ep + 1) % checkpoint_every == 0 or ep == n_iters - 1):
             ckpt_path = Path(checkpoint_dir) / f"{baseline_name}_seed{seed}_ep{global_ep + 1}.pt"
             ckpt_path.parent.mkdir(parents=True, exist_ok=True)
             try:
@@ -326,7 +353,15 @@ def train(
             except Exception as exc:
                 print(f"[checkpoint] {baseline_name} save skipped: {exc}")
 
-        if (ep + 1) % print_every == 0 or ep == n_episodes - 1:
+        # Rolling auto-save AFTER EVERY episode (overwrites; for --resume).
+        try:
+            agent.save(str(latest))
+            save_train_state(state_file, last_ep=global_ep + 1, seed=seed,
+                             extra={"baseline": baseline_name, "n_episodes_target": n_episodes})
+        except Exception as exc:
+            print(f"[autosave] {baseline_name} latest save skipped: {exc}")
+
+        if (ep + 1) % print_every == 0 or ep == n_iters - 1:
             elapsed = time.time() - t_start
             avg_r = float(np.mean(episode_rewards[-print_every:]))
             es_tag = f"  no_improve={es._no_improve_eps}" if es else ""
@@ -410,6 +445,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="Use the hard-mission preset")
     p.add_argument("--enforce-c3", action="store_true",
                    help="DEPRECATED — reward is always pure Phase 2.1")
+    p.add_argument("--resume", action="store_true",
+                   help="Auto-resume from the rolling *_latest.pt checkpoint for this seed "
+                        "and continue toward --episodes (uses the per-episode auto-save).")
     args = p.parse_args(argv)
 
     train(
@@ -425,6 +463,7 @@ def main(argv: list[str] | None = None) -> int:
         checkpoint_every=args.checkpoint_every,
         hard_mission=args.hard,
         enforce_c3=args.enforce_c3,
+        resume=args.resume,
     )
     return 0
 

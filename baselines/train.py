@@ -59,6 +59,12 @@ from utils.config import (
     SEVERITY_OH_OBS_INDEX,
     WORKER_STEPS_PER_MANAGER,
 )
+from utils.checkpointing import (
+    latest_ckpt_path,
+    load_train_state,
+    save_train_state,
+    state_path,
+)
 from utils.early_stopping import EarlyStopping
 from utils.logger import Logger
 from utils.obs import overlay_lambda_local  # single-source λ overlay (used by all solvers)
@@ -105,8 +111,13 @@ def train_ppo(
     early_stop_window: int = 100,
     early_stop_min_ep: int = 500,
     eval_at: int = 5000,
+    resume: bool = False,
 ) -> dict:
-    """Algorithm 1 main training loop. Returns final-episode stats."""
+    """Algorithm 1 main training loop. Returns final-episode stats.
+
+    Auto-saves a rolling ``*_latest.pt`` (manager + worker) + ``ppo_seed{seed}_state.json``
+    after EVERY episode. Pass ``resume=True`` to continue from the last saved episode.
+    """
     # --- Setup env ---
     env_cfg = hard_mission_config() if hard_mission else EnvConfig(initial_severity=initial_severity)
     env = ORANEnv(config=env_cfg, seed=seed)
@@ -140,12 +151,35 @@ def train_ppo(
     # ≥80% reduction in time-to-reconverge claim (W12 Exp3).
     lambda_state = LambdaState(K=K, force_zero_warm=disable_warm_start)
 
-    # --- Setup logger ---
+    # --- Resume from rolling latest checkpoint (auto-save mechanism) ---
+    start_ep = 0
+    ckpt_dir = Path(checkpoint_dir)
+    state_file = state_path(ckpt_dir, "ppo", seed)
+    mgr_latest = latest_ckpt_path(ckpt_dir, "manager", seed)
+    wkr_latest = latest_ckpt_path(ckpt_dir, "worker", seed)
+    if resume:
+        st = load_train_state(state_file)
+        if st is not None and mgr_latest.exists() and wkr_latest.exists():
+            if int(st.get("seed", seed)) != seed:
+                raise ValueError(
+                    f"Resume seed mismatch: state seed={st.get('seed')} != run seed={seed}"
+                )
+            manager.load(str(mgr_latest))
+            worker.load(str(wkr_latest))
+            start_ep = int(st["last_ep"])
+            print(f"[ppo] RESUME from ep {start_ep} (latest checkpoint, seed={seed})")
+            if start_ep >= n_episodes:
+                print(f"[ppo] already at/past target {n_episodes} episodes — nothing to do")
+        else:
+            print(f"[ppo] --resume requested but no latest checkpoint at {state_file} — starting fresh")
+
+    # --- Setup logger (append CSV when resuming so history is preserved) ---
     logger = Logger(
         run_name=f"ppo_seed{seed}",
         log_dir=log_dir,
         use_tensorboard=False,
         use_wandb=use_wandb,
+        append_csv=(start_ep > 0),
     )
     logger.log_hparams({
         "algo": "ppo",
@@ -174,7 +208,7 @@ def train_ppo(
     t_start = time.time()
     final_stats: dict = {}
 
-    for ep in range(n_episodes):
+    for ep in range(start_ep, n_episodes):
         # ---------------- Episode reset + LambdaState sync ----------------
         obs, info = env.reset(seed=seed + ep)
         severity_init = int(info["severity"])
@@ -277,12 +311,20 @@ def train_ppo(
         logger.log_dict(metrics, step=ep)
         final_stats = metrics
 
-        # Periodic checkpoint
+        # Milestone checkpoint (archival, kept)
         if checkpoint_every > 0 and ((ep + 1) % checkpoint_every == 0 or ep == n_episodes - 1):
-            ckpt_dir = Path(checkpoint_dir)
             ckpt_dir.mkdir(parents=True, exist_ok=True)
             manager.save(str(ckpt_dir / f"manager_seed{seed}_ep{ep + 1}.pt"))
             worker.save(str(ckpt_dir / f"worker_seed{seed}_ep{ep + 1}.pt"))
+
+        # Rolling auto-save AFTER EVERY episode (overwrites; for --resume).
+        # State sidecar written last + atomically so it only points at a fully
+        # saved (manager, worker) pair.
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+        manager.save(str(mgr_latest))
+        worker.save(str(wkr_latest))
+        save_train_state(state_file, last_ep=ep + 1, seed=seed,
+                         extra={"algo": "ppo", "n_episodes_target": n_episodes})
 
         if (ep + 1) % print_every == 0 or ep == n_episodes - 1:
             elapsed = time.time() - t_start
@@ -465,6 +507,9 @@ def parse_args() -> argparse.Namespace:
                         help="Path to .pt checkpoint to resume from (solvers only)")
     parser.add_argument("--resume-start-ep", type=int, default=0,
                         help="Episode offset when resuming (metrics appended after this ep)")
+    parser.add_argument("--resume", action="store_true",
+                        help="Auto-resume from the rolling *_latest.pt checkpoint for this "
+                             "seed and continue toward --episodes (uses the per-episode auto-save).")
     parser.add_argument("--log-dir", type=Path, default=Path("logs"))
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--hard", action="store_true", help="Use hard-mission preset")
@@ -527,6 +572,7 @@ def main() -> int:
             early_stop_window=args.early_stop_window,
             early_stop_min_ep=args.early_stop_min_ep,
             eval_at=args.eval_at,
+            resume=args.resume,
         )
         return 0
 
@@ -552,6 +598,7 @@ def main() -> int:
         eval_at=args.eval_at,
         resume_checkpoint=args.resume_checkpoint,
         resume_start_ep=args.resume_start_ep,
+        resume=args.resume,
     )
     return 0
 
