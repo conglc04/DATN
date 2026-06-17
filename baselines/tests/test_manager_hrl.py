@@ -51,13 +51,19 @@ class TestSetRrmBudget:
         assert env.r_min_urllc_anchor == pytest.approx(0.3, abs=1e-9)
         env.close()
 
-    def test_clips_to_feasible_cap(self):
-        """Request above _feasible_rrm_cap gets silently clipped to the cap."""
+    def test_clips_to_effective_upper_bound(self):
+        """Request above the upper bound clips to min(B_RRM_MAX, feasible_rrm_cap).
+
+        Two-tier clip: whichever of the outer B_RRM_MAX or the per-K/QoS
+        feasible cap is tighter binds. (After the 2026-06-16 d3_embb fix the
+        feasible cap rose above B_RRM_MAX at max severity, so B_RRM_MAX binds —
+        this asserts the effective bound, not one specific tier.)
+        """
         env = _make_env()
-        cap = env._feasible_rrm_cap
-        env.set_rrm_budget(cap + 0.2)  # request clearly above cap
-        assert env.r_min_urllc == pytest.approx(cap, abs=1e-9)
-        assert env.r_min_urllc_anchor == pytest.approx(cap, abs=1e-9)
+        hi = min(B_RRM_MAX, env._feasible_rrm_cap)
+        env.set_rrm_budget(hi + 0.2)  # request clearly above the effective bound
+        assert env.r_min_urllc == pytest.approx(hi, abs=1e-9)
+        assert env.r_min_urllc_anchor == pytest.approx(hi, abs=1e-9)
         env.close()
 
     def test_renormalizes_when_sum_exceeds_one(self):

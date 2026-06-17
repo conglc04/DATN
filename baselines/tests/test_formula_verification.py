@@ -316,11 +316,17 @@ class TestSeverityMonotonicity:
         for s in range(1, 6):
             assert SEVERITY_ALPHA[s]["urllc"] + SEVERITY_ALPHA[s]["embb"] == pytest.approx(1.0)
 
-    def test_cmdp_embb_floor_non_decreasing(self):
-        """eMBB throughput floor rises (or holds) with severity (more reserved capacity)."""
-        from utils.config import CMDP_D_J_SEVERITY
+    def test_cmdp_embb_floor_non_increasing(self):
+        """eMBB throughput floor FALLS (or holds) with severity — URLLC gets prioritized,
+        so less eMBB is guaranteed at higher severity. Must move the SAME direction as
+        SEVERITY_ALPHA['embb'] (also decreasing); the opposite would contradict the
+        URLLC-priority design (audit 2026-06-16)."""
+        from utils.config import CMDP_D_J_SEVERITY, SEVERITY_ALPHA
         d3 = [CMDP_D_J_SEVERITY[s]["d3_embb_mbps"] for s in range(1, 6)]
-        assert all(d3[i] <= d3[i + 1] for i in range(4))
+        ae = [SEVERITY_ALPHA[s]["embb"] for s in range(1, 6)]
+        assert all(d3[i] >= d3[i + 1] for i in range(4)), f"d3 must be non-increasing: {d3}"
+        assert d3[0] > d3[4]                                   # strictly lower at top severity
+        assert all(ae[i] > ae[i + 1] for i in range(4))        # α_embb co-directional (both ↓)
 
     def test_lambda_warm_mean_non_decreasing(self):
         """Warm-start dual magnitude rises with severity (tighter constraints)."""
@@ -328,6 +334,46 @@ class TestSeverityMonotonicity:
         means = [float(np.mean(LAMBDA_WARM[s])) for s in range(1, 6)]
         assert all(means[i] <= means[i + 1] for i in range(4))
         assert means[0] < means[4]
+
+    def test_lambda_warm_c3_slot_non_increasing(self):
+        """λ_warm C3 slot (index 2) is NON-INCREASING — co-directional with the
+        non-increasing d3_embb floor (audit 2026-06-17). A future flip of one
+        without the other would re-introduce the reward↔constraint contradiction."""
+        from utils.config import LAMBDA_WARM, CMDP_D_J_SEVERITY
+        c3_warm = [LAMBDA_WARM[s][2] for s in range(1, 6)]
+        d3 = [CMDP_D_J_SEVERITY[s]["d3_embb_mbps"] for s in range(1, 6)]
+        assert all(c3_warm[i] >= c3_warm[i + 1] for i in range(4)), f"C3 warm must be ↓: {c3_warm}"
+        assert all(d3[i] >= d3[i + 1] for i in range(4)), f"d3_embb must be ↓: {d3}"
+
+
+class TestConstraintBuilderGuards:
+    """K-degeneracy guards — the (4K+1) builders must reject K<1 / non-int K
+    (would silently produce a C3-only (1,) vector modelling no ambulance)."""
+
+    def test_build_dual_scales_rejects_k0(self):
+        from utils.config import build_dual_scales
+        with pytest.raises(ValueError):
+            build_dual_scales(0)
+
+    def test_build_dual_scales_rejects_non_int(self):
+        from utils.config import build_dual_scales
+        with pytest.raises(ValueError):
+            build_dual_scales(2.5)  # type: ignore[arg-type]
+
+    def test_build_d_phi_rejects_empty(self):
+        from utils.config import build_d_phi_vector
+        with pytest.raises(ValueError):
+            build_d_phi_vector(())
+
+    def test_build_lambda_warm_rejects_empty(self):
+        from utils.config import build_lambda_warm_vector
+        with pytest.raises(ValueError):
+            build_lambda_warm_vector([], 3)
+
+    def test_envconfig_rejects_k0(self):
+        from env.oran_env import EnvConfig
+        with pytest.raises(ValueError):
+            EnvConfig(K_ambulances=0)
 
     def test_qos_keys_consistent_across_severities(self):
         """All severities expose the identical QoS key set (no missing budget)."""
@@ -435,27 +481,31 @@ class TestIntraSlicePrbSplit:
     def test_softmax_weighted_split_remainder_to_largest_fracs(self):
         """B_U=100, sev=[1,2,3], β=1, ũ=0.
 
-        b = floor(0.5·100/3) = 16, S = 100 − 48 = 52.
-        softmax([1,2,3]) = [0.0900, 0.2447, 0.6652]
-        floor(52·w) = [4,12,34] (sum 50); remainder 2 → two largest fracs
-        (amb1 .726, amb0 .682) → [5,13,34]; +16 each → [21,29,50].
+        Severity NORMALIZED (÷5) before softmax: sev=[1,2,3] → [0.2,0.4,0.6].
+        b = floor(0.5·100/3) = 16, S = 100 − 48 = 52, ũ=0 (λ=0).
+        softmax(1·[0.2,0.4,0.6]) = [0.2693,0.3290,0.4018]
+        floor(52·w) = [14,17,20] (sum 51); remainder 1 → largest frac (amb2 .89)
+        → [14,17,21]; +16 each → [30,33,37].
         """
         env = self._env_k3([1, 2, 3], beta=1.0)
         out = env._prb_split_intra_slice(100)
-        assert out.tolist() == [21, 29, 50]
+        assert out.tolist() == [30, 33, 37]
         assert int(out.sum()) == 100          # budget exhausted exactly
+        assert out[0] < out[1] < out[2]       # monotone in severity
         env.close()
 
-    def test_extreme_beta_concentrates_on_top_severity(self):
-        """B_U=200, sev=[1,3,5], β=5 → near-all remainder to severity-5 amb.
+    def test_high_beta_concentrates_on_top_severity(self):
+        """B_U=200, sev=[1,3,5], β=5 (max gain) → most remainder to severity-5 amb.
 
-        b = floor(0.5·200/3) = 33, S = 200 − 99 = 101.
-        softmax(5·[1,3,5]) ≈ [~0, ~0, ~1] → shares [0,0,101] → [33,33,134].
+        Severity NORMALIZED: sev=[1,3,5] → [0.2,0.6,1.0]; logits = 5·[.2,.6,1]
+        = [1,3,5] (β=5 normalized ≡ raw-β=1 — normalization tames the old extreme).
+        b = floor(0.5·200/3) = 33, S = 200 − 99 = 101 → result [35,45,120].
         """
         env = self._env_k3([1, 3, 5], beta=5.0)
         out = env._prb_split_intra_slice(200)
-        assert out.tolist() == [33, 33, 134]
+        assert out.tolist() == [35, 45, 120]
         assert int(out.sum()) == 200
+        assert out[0] < out[1] < out[2]       # monotone in severity
         env.close()
 
     def test_s_le_zero_returns_uniform_floor(self):
@@ -468,10 +518,11 @@ class TestIntraSlicePrbSplit:
     def test_urgency_tiebreaker_breaks_equal_severity(self):
         """Equal severity [3,3,3], β=2, λ_C1=[0,.5,1] → ũ=[0,.5,1], δ=0.30.
 
-        logits = 6 + 0.30·ũ = [6, 6.15, 6.30]; softmax = [.2848,.3309,.3844]
-        b = floor(0.5·100/3)=16, S=52; floor(52·w)=[14,17,19] (sum 50);
-        remainder 2 → two largest fracs → [15,17,20]; +16 → [31,33,36].
-        Strictly increasing in λ_C1 (urgency tiebreaker wired correctly).
+        Normalized severity term β·(3/5)=1.2 is EQUAL across ambulances → cancels
+        in softmax (shift-invariant); only the δ·ũ tiebreaker differentiates.
+        logits = 1.2 + 0.30·ũ = [1.2, 1.35, 1.5]; result [31,33,36] (identical to
+        the raw-severity version — equal-severity tiebreaker path is unaffected by
+        normalization). Strictly increasing in λ_C1 (urgency tiebreaker wired).
         """
         env = self._env_k3([3, 3, 3], beta=2.0, lambda_c1=[0.0, 0.5, 1.0])
         out = env._prb_split_intra_slice(100)

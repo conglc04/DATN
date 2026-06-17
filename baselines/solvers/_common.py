@@ -17,8 +17,15 @@ import numpy as np
 from utils.config import (
     ALPHA_LAMBDA_DUAL,
     AMB_SEVERITY_NORM_OFFSET,
+    OBS_AOI_MAX_IDX,
+    OBS_AOI_MEAN_IDX,
+    OBS_BLER_IDX,
     OBS_FIXED_BLOCK_LEN,
     OBS_PER_AMB_BLOCK_LEN,
+    OBS_RHO_EMBB_IDX,
+    OBS_RHO_URLLC_IDX,
+    OBS_SEVERITY_OH_IDX,
+    OBS_SEVERITY_OH_LEN,
     SEVERITY_OH_OBS_INDEX,
     SEVERITY_QOS,
 )
@@ -118,21 +125,21 @@ def build_manager_state(
 ) -> np.ndarray:
     """Construct (6 + 4K+1)-dim Manager state s_H from Worker obs + λ_global.
 
-    Layout (obs is (20 + 10K + F)-dim):
-        [0:2]        ρ_urllc, ρ_eMBB         (obs[0:2])
-        [2]          mean BLER                (obs[9])
-        [3]          severity_ref normalized  (argmax(obs[10:15]) + 1) / 5.0
-        [4:6]        aoi_mean, aoi_max        (obs[18:20])
+    Layout (obs indices via OBS_*_IDX SSOT, utils.config — no hardcoded ints):
+        [0:2]        ρ_urllc, ρ_eMBB          (OBS_RHO_URLLC_IDX, OBS_RHO_EMBB_IDX)
+        [2]          mean BLER                (OBS_BLER_IDX)
+        [3]          severity_ref normalized  (argmax(obs[OBS_SEVERITY_OH_IDX:+LEN]) + 1) / 5.0
+        [4:6]        aoi_mean, aoi_max        (OBS_AOI_MEAN_IDX, OBS_AOI_MAX_IDX)
         [6:6+4K+1]   λ_global (4K+1)-dim
     At K=1: 6 + 5 = 11-dim (backward-compatible with legacy 11-dim state).
     """
-    rho_urllc = float(worker_obs[0])
-    rho_emBB = float(worker_obs[1])
-    bler = float(worker_obs[9])
-    sev_oh = worker_obs[SEVERITY_OH_OBS_INDEX: SEVERITY_OH_OBS_INDEX + 5]
+    rho_urllc = float(worker_obs[OBS_RHO_URLLC_IDX])
+    rho_emBB = float(worker_obs[OBS_RHO_EMBB_IDX])
+    bler = float(worker_obs[OBS_BLER_IDX])
+    sev_oh = worker_obs[OBS_SEVERITY_OH_IDX: OBS_SEVERITY_OH_IDX + OBS_SEVERITY_OH_LEN]
     sev_idx = float((np.argmax(sev_oh) + 1) / 5.0)
-    aoi_mean = float(worker_obs[18])
-    aoi_max = float(worker_obs[19])
+    aoi_mean = float(worker_obs[OBS_AOI_MEAN_IDX])
+    aoi_max = float(worker_obs[OBS_AOI_MAX_IDX])
     return np.concatenate([
         np.array([rho_urllc, rho_emBB, bler, sev_idx, aoi_mean, aoi_max], dtype=np.float32),
         np.asarray(lambda_global, dtype=np.float32),
@@ -152,8 +159,9 @@ def _manager_act(manager, s_H: np.ndarray) -> np.ndarray:
 # ============================================================
 
 
-SEVERITY_OH_START_INDEX = 10  # 20+10K+F obs layout — severity_ref one-hot at indices [10:15] (fixed block, unaffected by K/F)
-SEVERITY_OH_LEN = 5
+# Re-exported from the authoritative SSOT (utils.config) — do NOT hardcode 10/5.
+SEVERITY_OH_START_INDEX = SEVERITY_OH_OBS_INDEX  # obs[10:15]
+SEVERITY_OH_LEN = OBS_SEVERITY_OH_LEN
 
 
 def mask_severity(

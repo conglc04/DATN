@@ -265,7 +265,7 @@ def test_info_has_c_vec_shape_5():
 
 
 def test_info_exports_queue_diag_for_pk_audit():
-    """Reviewer M2 (Gemini W02, 2026-05-27): σ_S² + ρ + μ exposed via info dict.
+    """Reviewer M2 (internal review, W02, 2026-05-27): σ_S² + ρ + μ exposed via info dict.
 
     Allows reviewers to audit Pollaczek-Khinchine formula application:
        E[D_queue] = λ · E[S²] / (2(1 − ρ))

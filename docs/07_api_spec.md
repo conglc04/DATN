@@ -4,7 +4,27 @@
 **Quy tắc**: field-set = nguồn-sự-thật; số = derived; binding `assert env.observation_space.shape` tại B5 ([W18](weeks/W18_pha3_algorithm_code.md)). KHÔNG hard-code số.
 
 - **K=1 = 31-dim** (per-ambulance `severity_k` epic 2026-06-15: thay khối 24-fixed+5K bằng **20 fixed + 10·K + F(=1)**): `obs_dim = 20 + 10K + F`. K=1,F=1 → 31; K=3,F=1 → 51.
-  - **20 fixed** = ρ_urllc/ρ_eMBB(2) + HOL_urllc/HOL_eMBB(2) + PRB-ratio(3) + arr_urllc/arr_eMBB(2) + BLER(1) + **severity_ref one-hot[5]** (idx 10:15, `SEVERITY_OH_OBS_INDEX=10`) + **λ_local_C3_shared[1]** (idx 15, `LAMBDA_C3_SHARED_OBS_INDEX=15`) + **r_min_urllc_anchor[1]** (idx 16, Manager setpoint anchor) + n_bys(1) + AoI mean/max(2).
+  - **20 fixed block — SSOT = `OBS_*_IDX` trong `utils/config.py`** (mọi consumer import, KHÔNG hardcode số; `tests/test_obs_layout.py` khóa layout):
+
+    | idx | field | ý nghĩa | OBS_*_IDX |
+    |----:|-------|---------|-----------|
+    | 0 | rho_urllc | URLLC queue util ρ (mean/K, clip[0,1]) | `OBS_RHO_URLLC_IDX` |
+    | 1 | rho_emBB | eMBB queue util ρ | `OBS_RHO_EMBB_IDX` |
+    | 2 | hol_urllc_ms | URLLC HOL delay (ms, ≤100) | `OBS_HOL_URLLC_IDX` |
+    | 3 | hol_emBB_ms | eMBB HOL delay (ms, ≤1000) | `OBS_HOL_EMBB_IDX` |
+    | 4 | r_min_urllc | PRB ratio r_min (LIVE, drift/window) | `OBS_R_MIN_URLLC_IDX` |
+    | 5 | r_max_emBB | PRB ratio r_max | `OBS_R_MAX_EMBB_IDX` |
+    | 6 | r_ded_urllc | PRB ratio r_ded | `OBS_R_DED_URLLC_IDX` |
+    | 7 | arr_urllc | URLLC arrival (Σ/K)/1e3 | `OBS_ARR_URLLC_IDX` |
+    | 8 | arr_emBB | eMBB arrival /1e4 | `OBS_ARR_EMBB_IDX` |
+    | 9 | bler | mean BLER | `OBS_BLER_IDX` |
+    | 10:15 | severity_oh[5] | severity_ref one-hot (lvl 1..5) | `OBS_SEVERITY_OH_IDX` (=`SEVERITY_OH_OBS_INDEX`) |
+    | 15 | lambda_c3_shared | λ_local shared C3 (eMBB-floor dual) | `OBS_LAMBDA_C3_IDX` (=`LAMBDA_C3_SHARED_OBS_INDEX`) |
+    | 16 | r_min_urllc_anchor | Manager setpoint (FIXED/window) | `OBS_RMIN_ANCHOR_IDX` |
+    | 17 | n_bys | bystander UE count / M_eMBB | `OBS_N_BYS_IDX` |
+    | 18 | aoi_mean | mean AoI over K (s) | `OBS_AOI_MEAN_IDX` |
+    | 19 | aoi_max | max AoI over K (s) | `OBS_AOI_MAX_IDX` |
+
   - **obs[16] = `r_min_urllc_anchor`** (Manager setpoint cho cửa sổ hiện tại, set bởi `env.set_rrm_budget(b_rrm)` mỗi Manager window; **cố định trong window**), KHÁC với obs[4] = `r_min_urllc` *live* (Worker drift mỗi step qua Δr_min). Hiệu obs[4]−obs[16] = cumulative Worker drift (tín hiệu phối hợp Manager↔Worker). Trước W18 đây là hằng số tĩnh `config.rrm_budget_hint`; nay là setpoint động của Manager.
   - **per-amb (×K, 10-dim block, `OBS_PER_AMB_BLOCK_LEN=10`, base=`20+10k`)**: `{SINR_k, d_k, v_k, delay_norm_k, AoI_norm_k, severity_norm_k, λ_C1_k, λ_C2_k, λ_C4_k, λ_C5_k}` — `severity_norm_k = severity_k/5` (per-ambulance, độc lập); λ_C{1,2,4,5}_k = λ_local cho 4 constraint per-xe.
 - **severity_per_amb** ∈ {1..5}^K: sampled độc lập per ambulance, **cố định trong 1 episode**. **severity_ref := max(severity_per_amb)** lái mọi đại lượng SHARED (severity one-hot [10:15], `α_eMBB(sev)`, C3 R_min^sev, `info["severity"]`). `info["severity_per_amb"]` = nguồn-sự-thật per-xe.

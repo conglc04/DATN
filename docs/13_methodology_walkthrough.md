@@ -10,7 +10,7 @@
 
 ### 1.1 Bài toán General-K, 2 lớp
 - **Lớp 1 INTER-SLICE** (K-agnostic): chia P_TOTAL giữa URLLC slice (xe) vs eMBB slice (bystander) → `r_min^URLLC, r_max^eMBB`.
-- **Lớp 2 INTRA-URLLC** (K≥2): chia `B_U = r_min^URLLC·P_TOTAL` giữa K xe theo severity → `w_k = softmax(β·severity_k)`.
+- **Lớp 2 INTRA-URLLC** (K≥2): chia `B_U = r_min^URLLC·P_TOTAL` giữa K xe theo severity → `w_k = softmax(β·(severity_k/5))` (severity normalized ÷5, β = global gain).
 - K=1 (E1) = chỉ Lớp 1; K=3 (E2) = Lớp 1+2 đầy đủ. Xe = **URLLC-only** (1 luồng `ambulance_status` tổng hợp, F=1, 2026-06-14 consolidation — gộp vital + DENM/CAM cũ); eMBB = nền bystander.
 
 ### 1.2 State / Action (PHẦN 2)
@@ -50,7 +50,7 @@ MAC TTI=0.5ms [TS 38.211 μ=1] · Worker(xApp)=10ms · Manager(rApp)=1s; `W=WORK
 - **State observability (Markov)**: λ_local được inject qua `overlay_lambda_local(obs, lambda_local, K)` (utils/obs.py — **1 nguồn dùng chung** cho PPO + TD3 + SAC): per-amb λ_C{1,2,4,5}_k vào khối 10-dim per-amb (offset 6-9), λ_C3_shared vào `LAMBDA_C3_SHARED_OBS_INDEX=15`. Cả 3 solver thấy λ + severity_ref one-hot [10:15] như nhau → so sánh công bằng. Off-policy (TD3/SAC): `s` mang λ trước dual-update (đúng λ tạo `r_aug`), `next_obs` mang λ sau dual-update (λ điều kiện hành động kế).
 
 ### 2.4 Intra-slice (cấu trúc, LUÔN khả thi)
-`b = max(floor(κ·B_U/K), PRB_min^QoS)` (`κ=INTRA_SLICE_KAPPA=0.5`, `PRB_MIN_QOS=1`; fallback `b=B_U//K` nếu `K·b>B_U`), `S=B_U−K·b`, `w_k=softmax(β·severity_k+δ·ũ_k)`, `PRB_k=b+S·w_k`. `β∈[BETA_MIN,BETA_MAX]=[0,5]` từ action a[6] (K≥2); `severity_k`=`severity_per_amb[k]` (per-ambulance, độc lập). **2 structural guarantee** (đại số, verify test `tests/test_env_severity_k.py`): feasibility `ΣPRB=B_U` + no-starvation `PRB_k≥b` + weight-ordering đơn điệu theo severity (δ=ρ·β, `ρ=RHO_URGENCY_TIEBREAK=0.15`). Tiebreaker `ũ_k=λ_C1_k/max(λ_C1)` (normalized URLLC-delay urgency). K=1: `softmax([x])=[1.0]` ∀x ⟹ `PRB_0=B_U` luôn (numeric preservation).
+`b = max(floor(κ·B_U/K), PRB_min^QoS)` (`κ=INTRA_SLICE_KAPPA=0.5`, `PRB_MIN_QOS=1`; fallback `b=B_U//K` nếu `K·b>B_U`), `S=B_U−K·b`, `w_k=softmax(β·(severity_k/5)+δ·ũ_k)` (severity NORMALIZED ÷5 → β = global gain), `PRB_k=b+S·w_k`. `β∈[BETA_MIN,BETA_MAX]=[0.5,5]` từ action a[6] (K≥2); **BETA_MIN=0.5>0** (main method) đảm bảo ordering severity tối thiểu; `severity_k`=`severity_per_amb[k]` (per-ambulance, độc lập). **2 structural guarantee** (đại số, verify test `tests/test_env_severity_k.py`): feasibility `ΣPRB=B_U` + no-starvation `PRB_k≥b` + weight-ordering đơn điệu theo severity (δ=ρ·β, `ρ=RHO_URGENCY_TIEBREAK=0.15`). Tiebreaker `ũ_k=λ_C1_k/max(λ_C1)` (normalized URLLC-delay urgency). K=1: `softmax([x])=[1.0]` ∀x ⟹ `PRB_0=B_U` luôn (numeric preservation).
 
 ---
 

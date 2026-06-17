@@ -38,8 +38,9 @@ F_CARRIER: Final[float] = 3.5e9        # 3.5 GHz carrier (FR1 n78)
 BACH_MAI_LAT: Final[float] = 21.002965894776974
 BACH_MAI_LON: Final[float] = 105.84078002433277
 R_CELL_M: Final[float] = 300.0         # single-cell UMi radius quanh gNB=BV=(0,0), no handover
-NUM_RU: Final[int] = 20                # 20 O-RU in 3×3 km Hanoi grid (5×4)
-                                        # "Network Slicing with MEC and DRL for IoV". See REFERENCE_MAP §2.
+NUM_RU: Final[int] = 20                # RESERVED — multi-cell grid (5×4 O-RU); UNUSED in the
+                                        # current single-cell UMi env. Provenance for a future
+                                        # multi-cell extension. See REFERENCE_MAP §2. (audit 2026-06-16)
 C_FH_BPS: Final[float] = 25e9          # 25 Gbps eCPRI fronthaul capacity per O-RU
                                         # (O-RAN.WG4 standard cho 32T32R Massive MIMO sub-6 GHz;
                                         # raw IQ ~94 Gbps cho 32T32R @ 100 MHz, sau 7.2x compression
@@ -70,7 +71,7 @@ D_DET: Final[float] = 0.07e-3           # Deterministic processing delay (PDCCH 
                                         # ASSUMPTION — REFERENCE_MAP §2.
 D_STOCH: Final[float] = 0.05e-3         # Stochastic RLC + retx mean (in M/G/1 σ²).
                                          # Reviewer PB-C2 fix (2026-05-27): chốt 0.05 ms
-                                         # align với docs/13 §1.3 (Gemini M2: D_stoch ~ Uniform(0, 2·0.05ms)
+                                         # align với docs/13 §1.3 (internal review M2: D_stoch ~ Uniform(0, 2·0.05ms)
                                          # → E[D_stoch] = 0.05 ms). Old value 0.15e-3 mâu thuẫn với
                                          # service-time distribution specification.
 SAFETY_QP_PERIOD: Final[float] = 10e-3  # xApp QP control cycle
@@ -93,8 +94,11 @@ ODU_LOCAL_CHECK: Final[float] = 0.5e-3  # O-DU local 1-TTI check
 #   Confirmed by Zexian Li 2018 §II: "1ms / 99.9999%" for URLLC.
 #   See also: docs/02_requirements.md#severity-qos-table, docs/REFERENCE_MAP.md §2
 # AoI_max medical thresholds (0.1–1.0 s): ENGINEERING/USE-CASE ASSUMPTION for
-#   emergency telemetry (no direct medical-standards paper in corpus). Sensitivity
-#   analysis ±50% scheduled in REFERENCE_MAP §5. See docs/REFERENCE_MAP.md §2.
+#   emergency telemetry (no direct medical-standards paper in corpus). The tightest
+#   value (0.1 s @ severity 4-5) mirrors the order of D_max^sev-5 (1 ms latency →
+#   0.1 s freshness, 100× looser, status-update vs packet-delay timescales); the
+#   loosest (1.0 s @ severity 1) matches relaxed non-urgent monitoring. Absolute
+#   values NOT claimed as clinical fact. Sensitivity ±50% scheduled in REFERENCE_MAP §5.
 # Units: seconds
 # ============================================================
 SEVERITY_QOS: Final[dict[int, dict[str, float]]] = {
@@ -155,26 +159,40 @@ SEVERITY_ALPHA: Final[dict[int, dict[str, float]]] = {
 # Reference: docs/05_agent_workflow.md#cmdp-thresholds
 # Used in: λ_j ← max(0, λ_j + α_λ · (J_Cj − d_j^sev))
 # ============================================================
+# d3_embb_mbps (eMBB throughput floor) is NON-INCREASING in severity (audit
+# 2026-06-16 fix): higher severity → URLLC prioritized → LESS eMBB guaranteed,
+# consistent with SEVERITY_ALPHA["embb"] which also drops (0.70→0.05). The
+# previous increasing table [10,15,20,30,30] pulled AGAINST URLLC priority
+# (reward deprioritized eMBB while C3 demanded MORE eMBB) — a contradiction.
 CMDP_D_J_SEVERITY: Final[dict[int, dict[str, float]]] = {
-    1: {"d1_lat_mean": 20e-3, "d2_lat_tail": 1e-3,  "d3_embb_mbps": 10.0, "d4_aoi_mean": 1.0, "d5_aoi_tail": 1e-2},
-    2: {"d1_lat_mean": 10e-3, "d2_lat_tail": 1e-4,  "d3_embb_mbps": 15.0, "d4_aoi_mean": 0.5, "d5_aoi_tail": 1e-3},
+    1: {"d1_lat_mean": 20e-3, "d2_lat_tail": 1e-3,  "d3_embb_mbps": 30.0, "d4_aoi_mean": 1.0, "d5_aoi_tail": 1e-2},
+    2: {"d1_lat_mean": 10e-3, "d2_lat_tail": 1e-4,  "d3_embb_mbps": 25.0, "d4_aoi_mean": 0.5, "d5_aoi_tail": 1e-3},
     3: {"d1_lat_mean": 5e-3,  "d2_lat_tail": 1e-4,  "d3_embb_mbps": 20.0, "d4_aoi_mean": 0.2, "d5_aoi_tail": 1e-3},
-    4: {"d1_lat_mean": 2e-3,  "d2_lat_tail": 1e-5,  "d3_embb_mbps": 30.0, "d4_aoi_mean": 0.1, "d5_aoi_tail": 1e-3},
-    5: {"d1_lat_mean": 1e-3,  "d2_lat_tail": 1e-5,  "d3_embb_mbps": 30.0, "d4_aoi_mean": 0.1, "d5_aoi_tail": 1e-3},
+    4: {"d1_lat_mean": 2e-3,  "d2_lat_tail": 1e-5,  "d3_embb_mbps": 15.0, "d4_aoi_mean": 0.1, "d5_aoi_tail": 1e-3},
+    5: {"d1_lat_mean": 1e-3,  "d2_lat_tail": 1e-5,  "d3_embb_mbps": 10.0, "d4_aoi_mean": 0.1, "d5_aoi_tail": 1e-3},
 }
 
-# λ_warm table — per-severity warm-start (monotonic; higher severity → higher λ).
+# λ_warm table [C1, C2, C3, C4, C5] — per-severity warm-start. Overall λ grows
+# with severity (mean), BUT the C3 slot (index 2, eMBB-floor dual) is
+# NON-INCREASING [0.10→0.02] (audit 2026-06-17): co-directional with the
+# now non-increasing d3_embb floor — at high severity the eMBB floor is low and
+# easily met, so C3 is rarely binding ⟹ lower warm-start dual. (Previously the
+# C3 slot was increasing, matching the old increasing d3_embb — flipped together.)
 # Reference: docs/05_agent_workflow.md:174-180
 LAMBDA_WARM: Final[dict[int, list[float]]] = {
-    1: [0.02, 0.01, 0.00, 0.01, 0.00],   # NON_URGENT
-    2: [0.15, 0.08, 0.02, 0.05, 0.02],   # SEMI_URGENT
+    1: [0.02, 0.01, 0.10, 0.01, 0.00],   # NON_URGENT  (C3 highest: eMBB floor 30 Mbps)
+    2: [0.15, 0.08, 0.08, 0.05, 0.02],   # SEMI_URGENT
     3: [0.60, 0.70, 0.05, 0.50, 0.60],   # URGENT
-    4: [1.20, 1.50, 0.08, 1.20, 1.50],   # EMERGENCY
-    5: [1.80, 2.20, 0.10, 1.50, 2.00],   # IMMEDIATE
+    4: [1.20, 1.50, 0.03, 1.20, 1.50],   # EMERGENCY
+    5: [1.80, 2.20, 0.02, 1.50, 2.00],   # IMMEDIATE   (C3 lowest: eMBB floor 10 Mbps)
 }
 
 # ============================================================
-# Traffic classes
+# Traffic classes — REFERENCE TABLE ONLY (NOT wired into the env).
+# ⚠️ The per-class D_max here is documentation/provenance; the live CMDP
+# latency constraint C1 uses SEVERITY_QOS[severity]["D_max"] (per-ambulance
+# severity), NOT these traffic-class values. Do not read constraint budgets
+# from this dict. (audit 2026-06-16)
 # Reference: docs/02_requirements.md#traffic-classes
 # ============================================================
 TRAFFIC_CLASSES: Final[dict[str, dict]] = {
@@ -235,18 +253,56 @@ LR_V_H: Final[float] = 5e-5             # Manager critic (slow)
 LR_PI_L: Final[float] = 1e-3            # Worker / xApp (fast)
 LR_V_L: Final[float] = 1e-3             # Worker critic (fast)
 
-# Worker observation layout indices (obs_dim = 20 + 10K + F, per-ambulance
-# severity_k epic 2026-06-15: fixed block 24→20 — λ_local block shrinks from
-# 5 (C1..C5) to 1 (shared C3 only, the rest move into the per-amb block); the
-# per-amb block grows from 5 to 10 dims/amb — adds severity_k_norm + per-amb
-# λ_local (C1_k, C2_k, C4_k, C5_k). For K=1, F=1: 20 + 10 + 1 = 31 (was 30).
-# SEVERITY_OH (severity_ref one-hot) stays in the fixed block.
-SEVERITY_OH_OBS_INDEX: Final[int] = 10     # severity_ref one-hot at obs[10:15]
-SEVERITY_OH_LEN: Final[int] = 5
-LAMBDA_C3_SHARED_OBS_INDEX: Final[int] = 15  # shared C3 λ_local at obs[15] (scalar)
-
+# ============================================================
+# Observation layout — SINGLE SOURCE OF TRUTH (obs_dim = OBS_FIXED_BLOCK_LEN
+# + OBS_PER_AMB_BLOCK_LEN·K + F; K=1,F=1 → 31). Every consumer — env._observe(),
+# mask_severity(), overlay_lambda_local(), build_manager_state(), docs/07_api_spec
+# — MUST import these constants. Do NOT hardcode the integer indices anywhere.
+# A layout-lock test (tests/test_obs_layout.py) asserts _observe() places each
+# field at its named index. (audit 2026-06-17, full-SSOT Phương án 1)
+#
+# Fixed block obs[0:20] — Index | Field | Meaning | _observe() source
+#   0  rho_urllc          URLLC queue util ρ=λ/μ (mean/K, clip[0,1])  np.mean(queues[urllc_k].rho)
+#   1  rho_emBB           eMBB queue util ρ (clip[0,1])               queues["eMBB"].rho
+#   2  hol_urllc_ms       URLLC head-of-line delay (ms, mean/K, ≤100) mean(queues[urllc_k].hol_delay)·1e3
+#   3  hol_emBB_ms        eMBB HOL delay (ms, ≤1000)                  queues["eMBB"].hol_delay·1e3
+#   4  r_min_urllc        PRB ratio r_min^URLLC (LIVE, drifts/window) prb_ratios[0]=self.r_min_urllc
+#   5  r_max_emBB         PRB ratio r_max^eMBB                        prb_ratios[1]=self.r_max_emBB
+#   6  r_ded_urllc        PRB ratio r_ded^URLLC                       prb_ratios[2]=self.r_ded_urllc
+#   7  arr_urllc          URLLC arrival (Σ over K)/1e3                Σ queues[urllc_k].arrival_rate/1e3
+#   8  arr_emBB           eMBB arrival /1e4                           queues["eMBB"].arrival_rate/1e4
+#   9  bler               mean BLER                                   float(self.last_bler)
+#   10:15 severity_oh[5]  severity_ref one-hot (lvl 1..5)             sev_oh[self.severity-1]=1
+#   15 lambda_c3_shared   λ_local shared C3 (eMBB-floor dual)         self._lambda_local[4K]
+#   16 r_min_urllc_anchor Manager setpoint anchor (FIXED/window)      self.r_min_urllc_anchor
+#   17 n_bys              bystander UE count / M_eMBB                 bystander.active_ue_count/M_eMBB
+#   18 aoi_mean           mean AoI over K (s)                         aoi_per_amb.mean()
+#   19 aoi_max            max AoI over K (s)                          aoi_per_amb.max()
+# ============================================================
+OBS_RHO_URLLC_IDX: Final[int] = 0
+OBS_RHO_EMBB_IDX: Final[int] = 1
+OBS_HOL_URLLC_IDX: Final[int] = 2
+OBS_HOL_EMBB_IDX: Final[int] = 3
+OBS_R_MIN_URLLC_IDX: Final[int] = 4
+OBS_R_MAX_EMBB_IDX: Final[int] = 5
+OBS_R_DED_URLLC_IDX: Final[int] = 6
+OBS_ARR_URLLC_IDX: Final[int] = 7
+OBS_ARR_EMBB_IDX: Final[int] = 8
+OBS_BLER_IDX: Final[int] = 9
+OBS_SEVERITY_OH_IDX: Final[int] = 10       # one-hot occupies [10:15]
+OBS_SEVERITY_OH_LEN: Final[int] = 5
+OBS_LAMBDA_C3_IDX: Final[int] = 15
+OBS_RMIN_ANCHOR_IDX: Final[int] = 16
+OBS_N_BYS_IDX: Final[int] = 17
+OBS_AOI_MEAN_IDX: Final[int] = 18
+OBS_AOI_MAX_IDX: Final[int] = 19
 OBS_FIXED_BLOCK_LEN: Final[int] = 20       # fixed block obs[0:20]
 OBS_PER_AMB_BLOCK_LEN: Final[int] = 10     # per-ambulance block, 10 dims/amb
+
+# Backward-compat aliases (existing importers reference these names)
+SEVERITY_OH_OBS_INDEX: Final[int] = OBS_SEVERITY_OH_IDX        # severity_ref one-hot at obs[10:15]
+SEVERITY_OH_LEN: Final[int] = OBS_SEVERITY_OH_LEN
+LAMBDA_C3_SHARED_OBS_INDEX: Final[int] = OBS_LAMBDA_C3_IDX     # shared C3 λ_local at obs[15]
 
 # Per-ambulance block offsets (relative to OBS_FIXED_BLOCK_LEN + 10*k):
 #   SINR_k, d_k, v_k, delay_norm_k, AoI_norm_k, severity_k_norm,
@@ -268,14 +324,21 @@ AMB_LAMBDA_C5_OFFSET: Final[int] = 9
 #   beta = BETA_MIN + (BETA_MAX - BETA_MIN) * sigmoid(a[6])
 # Intra-slice split: b = max(floor(κ·B_U/K), PRB_MIN_QOS), feasibility fallback
 # b = B_U // K if K·b > B_U; remainder S = B_U - K·b distributed via
-# w = softmax(β·severity_per_amb + δ·ũ), δ = ρ·β. At K=1, softmax([x]) = [1.0]
-# always ⟹ PRB_0 = B_U regardless of parameters (exact K=1 preservation).
+# w = softmax(β·(severity_per_amb/5) + δ·ũ), δ = ρ·β. Severity is NORMALIZED
+# (÷5, same as obs severity_k_norm) so β is a pure GLOBAL GAIN on unit-scale
+# priority. At K=1, softmax([x]) = [1.0] always ⟹ PRB_0 = B_U regardless of
+# parameters (exact K=1 preservation).
 # ============================================================
-BETA_MIN: Final[float] = 0.0
+# BETA_MIN > 0 (main method, audit 2026-06-16): guarantees a MINIMUM severity
+# ordering in the PRB split — the agent cannot learn β→0 to flatten priority
+# (severity-aware prioritization is a core contribution, not optional). At
+# BETA_MIN=0.5 with normalized severity (spread 0.8) the sev5:sev1 weight ratio
+# floor ≈ exp(0.5·0.8) ≈ 1.49×; at BETA_MAX=5 it reaches ≈ exp(4) ≈ 55×.
+BETA_MIN: Final[float] = 0.5
 BETA_MAX: Final[float] = 5.0
 INTRA_SLICE_KAPPA: Final[float] = 0.5      # floor fraction: b = floor(κ·B_U/K)
 PRB_MIN_QOS: Final[int] = 1                # minimum PRB floor per ambulance
-RHO_URGENCY_TIEBREAK: Final[float] = 0.15  # δ = ρ·β; ρ<0.2 ⟹ severity dominates softmax
+RHO_URGENCY_TIEBREAK: Final[float] = 0.15  # δ = ρ·β; severity term (β·0.8) dominates tiebreaker (β·0.15)
 
 # ============================================================
 # Phase 2.1 reward normalization (docs/13 Phase 2.1, post-restructure 2026-05-26)
@@ -300,7 +363,7 @@ R_REF_EMBB_MBPS: Final[float] = 100.0   # eMBB log-utility normalization anchor 
 # See agents/lagrangian.py CONSTRAINT_DUAL_SCALES + docs/13 §2.3.3.
 AOI_REF_S: Final[float] = 0.1
 
-# Reviewer M4 (Gemini Section II W06, 2026-05-27):
+# Reviewer M4 (internal review, W06, 2026-05-27):
 # Lagrangian projection upper bound — Π_Λ(λ) = clip(λ, 0, LAMBDA_MAX).
 # Prevents dual ascent blow-up under sustained constraint violations
 # (Exp11 Robustness sensor failure scenarios). Empirical λ ≤ 2.5 across
@@ -346,22 +409,29 @@ B_RRM_MAX: Final[float] = 0.85   # upper bound: leaves ≥15% PRBs for eMBB
 # Legacy aliases (DO NOT use in new code — kept for backward compat in tests)
 T_H_REAL: Final[float] = T_H_REAL_SEC       # was 1.0
 T_H_SIM: Final[float] = T_H_SEC             # was 10e-3 — now 100e-3 (semantic fix)
-T_L_SIM: Final[float] = T_TTI_SEC           # was 0.5e-3 — same value, semantic was wrong
+T_L_SIM: Final[float] = T_L_SEC             # Worker/xApp step = 10 ms (FIXED 2026-06-16: was
+                                            # aliased to T_TTI_SEC=0.5ms — a 20× semantic bug;
+                                            # T_L is 20 MAC ticks, not one. Unused, fixed defensively.)
 
-T_INT_RANGE: Final[tuple[float, float]] = (10e-3, 100e-3)  # xApp T_int learned range
+# RESERVED — learnable xApp decision interval T_int ∈ [10,100] ms. UNUSED and
+# CONFLICTS with the current FIXED two-timescale design (T_L=10ms, T_H=100ms,
+# W=WORKER_STEPS_PER_MANAGER=10 → GAMMA_MANAGER=γ^10 assumes a fixed W). A
+# learnable T_int would break that fixed SMDP ratio. Kept only as provenance.
+# (audit 2026-06-17)
+T_INT_RANGE: Final[tuple[float, float]] = (10e-3, 100e-3)
 
 # ============================================================
-# Hysteresis (anti ping-pong handover)
-# Reference: docs/05_agent_workflow.md
+# RESERVED — multi-cell handover + pre-tightening (OUT OF SINGLE-CELL SCOPE,
+# NOT WIRED). The env is single-cell UMi (R_CELL_M=300, no handover); the
+# constants below are unused by env/agents. PRE_TIGHTEN_ETA additionally
+# references "φ_next" (the removed 5-phase FSM — phase→severity swap 2026-06-14),
+# so it is doubly stale: severity is fixed per episode, there is no next phase to
+# pre-tighten toward. Kept only as design provenance. (audit 2026-06-17)
 # ============================================================
-HYSTERESIS_RSRP_DB: Final[float] = 3.0
-T_GUARD_SEC: Final[float] = 2.0
-
-# Proactive handover trigger (per Algorithm 3)
-HANDOVER_ETA_TRIGGER: Final[float] = 10.0   # seconds; pre-allocate when ETA < 10s
-
-# Pre-tightening
-PRE_TIGHTEN_ETA: Final[float] = 30.0        # seconds; apply D_max^φ_next if ETA_next < 30s
+HYSTERESIS_RSRP_DB: Final[float] = 3.0      # reserved (anti ping-pong handover)
+T_GUARD_SEC: Final[float] = 2.0             # reserved
+HANDOVER_ETA_TRIGGER: Final[float] = 10.0   # reserved (proactive handover ETA trigger)
+PRE_TIGHTEN_ETA: Final[float] = 30.0        # reserved + phase-FSM vestige (φ_next no longer exists)
 
 
 def get_severity_thresholds(sev: int) -> dict[str, float]:
@@ -417,6 +487,8 @@ def build_dual_scales(K: int) -> np.ndarray:
     At K=1: [D_REF_URLLC, 1.0, AOI_REF_S, 1.0, R_REF_EMBB_MBPS] — the
     permutation [0,1,3,4,2] of the legacy 5-dim CONSTRAINT_DUAL_SCALES.
     """
+    if not isinstance(K, (int, np.integer)) or K < 1:
+        raise ValueError(f"K must be an int >= 1 (at least one ambulance); got {K!r}")
     return np.concatenate([
         np.full(K, D_REF_URLLC, dtype=np.float64),     # C1_k
         np.full(K, 1.0, dtype=np.float64),             # C2_k
@@ -434,7 +506,12 @@ def build_lambda_warm_vector(severity_per_amb: Sequence[int], severity_ref: int)
     ``LAMBDA_WARM[severity_ref][2]``. At K=1 with severity_ref==severity_per_amb[0]
     this is the permutation [0,1,3,4,2] of ``LAMBDA_WARM[sev]`` — exact match
     to the legacy reset_episode() warm-start.
+
+    Note: the C3 slot (LAMBDA_WARM[sev][2]) is NON-INCREASING in severity,
+    co-directional with the non-increasing d3_embb floor (audit 2026-06-17).
     """
+    if len(severity_per_amb) < 1:
+        raise ValueError("severity_per_amb must have >= 1 entry (K >= 1)")
     for sev in (*severity_per_amb, severity_ref):
         if sev not in LAMBDA_WARM:
             raise ValueError(f"Severity {sev} not in LAMBDA_WARM table (keys: {sorted(LAMBDA_WARM)})")
@@ -450,11 +527,19 @@ def build_d_phi_vector(severity_per_amb: Sequence[int]) -> np.ndarray:
     """Build (4K+1,)-dim d_phi threshold vector.
 
     d1_k/d2_k/d4_k/d5_k come from ``get_severity_thresholds(severity_per_amb[k])``
-    — each ambulance is held to its OWN severity's QoS budget. The shared
-    C3 slot (index 4K) is 0.0 — the eMBB signed-gap threshold, mirroring the
-    legacy ``d3 == 0.0`` (the R_min floor is already baked into c_vec[4K] via
-    CMDP_D_J_SEVERITY[severity_ref]["d3_embb_mbps"]).
+    — each ambulance is held to its OWN severity's QoS budget.
+
+    Note (no ``severity_ref`` parameter, unlike ``build_lambda_warm_vector``):
+    the shared C3 slot (index 4K) is **0.0 unconditionally** — the threshold is
+    for the SIGNED eMBB gap, and the R_min^sev_ref floor is carried inside the
+    env-computed ``c_vec[4K] = R_min^sev_ref − R_eMBB`` (oran_env step()), NOT in
+    d_phi. So C3 reduces to ``deviation = c3 − 0 = signed_gap``. ``severity_ref``
+    is only relevant for locating that floor in c_vec; it is not needed here.
+    ⚠️ Load-bearing coupling: if c_vec[4K] were ever changed to raw R_eMBB (not
+    the gap), d3=0 would become WRONG — tests/test_env_c3.py locks the sign.
     """
+    if len(severity_per_amb) < 1:
+        raise ValueError("severity_per_amb must have >= 1 entry (K >= 1)")
     d1 = np.array([get_severity_thresholds(s)["d1"] for s in severity_per_amb], dtype=np.float64)
     d2 = np.array([get_severity_thresholds(s)["d2"] for s in severity_per_amb], dtype=np.float64)
     d4 = np.array([get_severity_thresholds(s)["d4"] for s in severity_per_amb], dtype=np.float64)

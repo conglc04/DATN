@@ -85,8 +85,25 @@ from utils.config import (
     INTRA_SLICE_KAPPA,
     LAMBDA_C3_SHARED_OBS_INDEX,
     MAC_TICKS_PER_WORKER,
+    OBS_AOI_MAX_IDX,
+    OBS_AOI_MEAN_IDX,
+    OBS_ARR_EMBB_IDX,
+    OBS_ARR_URLLC_IDX,
+    OBS_BLER_IDX,
     OBS_FIXED_BLOCK_LEN,
+    OBS_HOL_EMBB_IDX,
+    OBS_HOL_URLLC_IDX,
+    OBS_LAMBDA_C3_IDX,
+    OBS_N_BYS_IDX,
     OBS_PER_AMB_BLOCK_LEN,
+    OBS_R_DED_URLLC_IDX,
+    OBS_R_MAX_EMBB_IDX,
+    OBS_R_MIN_URLLC_IDX,
+    OBS_RHO_EMBB_IDX,
+    OBS_RHO_URLLC_IDX,
+    OBS_RMIN_ANCHOR_IDX,
+    OBS_SEVERITY_OH_IDX,
+    OBS_SEVERITY_OH_LEN,
     PRB_MIN_QOS,
     RHO_URGENCY_TIEBREAK,
     SEVERITY_OH_OBS_INDEX,
@@ -197,6 +214,17 @@ class EnvConfig:
     # Pre-restructure form r = -α_U · L_URLLC + α_e · U_eMBB caused double-counting
     # with λ_1, λ_2 (W11 audit found λ_1, λ_2 stagnated). L_URLLC retained in info
     # dict for diagnostics only. See docs/13 §2.1, docs/05 #reward-rl.
+
+    def __post_init__(self) -> None:
+        # Guard against a degenerate K=0 problem: the (4K+1)-dim constraint
+        # vectors would collapse to a C3-only (1,)-dim vector that silently
+        # "passes" while modelling no ambulance at all. (audit 2026-06-16)
+        if not isinstance(self.K_ambulances, int) or self.K_ambulances < 1:
+            raise ValueError(f"K_ambulances must be an int >= 1; got {self.K_ambulances!r}")
+        if not isinstance(self.num_streams, int) or self.num_streams < 1:
+            raise ValueError(f"num_streams must be an int >= 1; got {self.num_streams!r}")
+        if not (1 <= self.initial_severity <= 5):
+            raise ValueError(f"initial_severity must be in 1..5; got {self.initial_severity}")
 
 
 def hard_mission_config(
@@ -803,8 +831,14 @@ class ORANEnv(gym.Env):
 
         b = max(floor(κ·B_U/K), PRB_MIN_QOS); feasibility fallback b = B_U//K
         if K·b > B_U. Remainder S = B_U - K·b is distributed via
-        w = softmax(β·severity_per_amb + δ·ũ), δ = ρ·β, where ũ is the
+        w = softmax(β·(severity_per_amb/5) + δ·ũ), δ = ρ·β, where ũ is the
         per-ambulance C1 λ_local urgency tiebreaker normalized to [0,1].
+
+        Severity is NORMALIZED to [0.2, 1.0] (÷5, same convention as obs
+        severity_k_norm) BEFORE entering the softmax (audit 2026-06-16) so β acts
+        as a pure global gain on a unit-scale priority — decoupled from the raw
+        1..5 magnitude. β ∈ [BETA_MIN, BETA_MAX]; BETA_MIN>0 guarantees a minimum
+        severity ordering (agent cannot fully flatten priority).
 
         At K=1, softmax([x]) = [1.0] always ⟹ PRB_0 = b + S = B_U regardless
         of β/severity/urgency — exact K=1 preservation.
@@ -827,7 +861,8 @@ class ORANEnv(gym.Env):
 
         beta = self._beta
         delta = RHO_URGENCY_TIEBREAK * beta
-        logits = beta * self.severity_per_amb.astype(np.float64) + delta * u_tilde
+        sev_norm = self.severity_per_amb.astype(np.float64) / 5.0   # [0.2,1.0], β = global gain
+        logits = beta * sev_norm + delta * u_tilde
         w = _softmax(logits)
 
         shares = np.floor(S * w).astype(np.int64)
@@ -919,7 +954,8 @@ class ORANEnv(gym.Env):
             [10:15] severity_ref one-hot (levels 1..5 NON_URGENT..IMMEDIATE,
                     severity_ref = max(severity_per_amb))
             [15]    λ_local for shared C3 (eMBB throughput floor)
-            [16]    rrm_budget hint (Manager → Worker)
+            [16]    r_min_urllc_anchor (Manager setpoint, FIXED within window;
+                    obs[4]=live r_min drifts around it — see set_rrm_budget)
             [17]    n_bys (active bystander UE count, normalized by M_eMBB)
             [18:20] mean AoI + max AoI (s, across K ambulances × F streams)
             == 10K per-ambulance block (interleaved per k) ==
@@ -1038,21 +1074,30 @@ class ORANEnv(gym.Env):
             axis=1,
         ).reshape(-1)
 
+        # === Fixed 20-dim block — assembled by NAMED INDEX (single source of
+        # truth = OBS_*_IDX in utils.config; do NOT hardcode positions here). ===
+        fixed = np.zeros(OBS_FIXED_BLOCK_LEN, dtype=np.float32)
+        fixed[OBS_RHO_URLLC_IDX] = rho_urllc
+        fixed[OBS_RHO_EMBB_IDX] = rho_emBB
+        fixed[OBS_HOL_URLLC_IDX] = hol_urllc_ms
+        fixed[OBS_HOL_EMBB_IDX] = hol_emBB_ms
+        fixed[OBS_R_MIN_URLLC_IDX] = prb_ratios[0]
+        fixed[OBS_R_MAX_EMBB_IDX] = prb_ratios[1]
+        fixed[OBS_R_DED_URLLC_IDX] = prb_ratios[2]
+        fixed[OBS_ARR_URLLC_IDX] = arr_urllc
+        fixed[OBS_ARR_EMBB_IDX] = arr_emBB
+        fixed[OBS_BLER_IDX] = float(self.last_bler)
+        fixed[OBS_SEVERITY_OH_IDX:OBS_SEVERITY_OH_IDX + OBS_SEVERITY_OH_LEN] = sev_oh
+        fixed[OBS_LAMBDA_C3_IDX] = lam_c3_shared
+        fixed[OBS_RMIN_ANCHOR_IDX] = self.r_min_urllc_anchor
+        fixed[OBS_N_BYS_IDX] = n_bys
+        fixed[OBS_AOI_MEAN_IDX] = aoi_mean
+        fixed[OBS_AOI_MAX_IDX] = aoi_max
+
         obs = np.concatenate(
             [
-                # === Fixed 20-dim block ===
-                np.array([rho_urllc, rho_emBB,                       # [0:2] queue utilization
-                          hol_urllc_ms, hol_emBB_ms], dtype=np.float32),  # [2:4] HOL ms
-                prb_ratios,                                          # [4:7] r_min, r_max, r_ded
-                np.array([arr_urllc, arr_emBB,                       # [7:9] arrival rates
-                          float(self.last_bler)], dtype=np.float32), # [9]   BLER
-                sev_oh,                                              # [10:15] severity_ref one-hot
-                np.array([lam_c3_shared], dtype=np.float32),         # [15]    λ_local shared C3
-                np.array([self.r_min_urllc_anchor, n_bys,            # [16:20] Manager anchor, n_bys,
-                          aoi_mean, aoi_max], dtype=np.float32),     #         mean AoI, max AoI
-                # === 10K per-amb block ===
+                fixed,                                               # [0:20]
                 per_amb,                                             # [20:20+10K]
-                # === F per-stream block ===
                 aoi_stream_vec,                                      # [20+10K:20+10K+F]
             ]
         )
@@ -1101,7 +1146,7 @@ class ORANEnv(gym.Env):
             # exported for diagnostics — NOT used in reward computation. Reward is
             # alpha_e * log1p(R_eMBB/R_REF) only; URLLC enforced via λ_1, λ_2.
             "l_urllc_mean": float(self._last_l_urllc),
-            # Reviewer M2 (Gemini W02, 2026-05-27): expose M/G/1 queue diagnostics
+            # Reviewer M2 (internal review, W02, 2026-05-27): expose M/G/1 queue diagnostics
             # so reviewers can audit Pollaczek-Khinchine formula application.
             # Returns dict {lambda, mu, rho, E_S, E_S2, E_D_queue, HOL, stable}.
             # See docs/13 §1.3 service-time distribution + env/queue_model.py:62-73.

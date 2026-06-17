@@ -66,7 +66,10 @@ def test_lambda_warm():
     """λ_warm warm-start for severity 5 IMMEDIATE (tightest) matches docs/05."""
     from utils import config as cfg
 
-    expected_immediate = [1.80, 2.20, 0.10, 1.50, 2.00]
+    # C3 slot (index 2) is 0.02 — non-increasing in severity, co-directional with
+    # the non-increasing d3_embb floor (audit 2026-06-17). sev5 has the lowest
+    # eMBB floor (10 Mbps), easily met ⟹ lowest C3 warm-start dual.
+    expected_immediate = [1.80, 2.20, 0.02, 1.50, 2.00]
     assert cfg.LAMBDA_WARM[5] == expected_immediate, f"λ_warm[IMMEDIATE] mismatch: {cfg.LAMBDA_WARM[5]}"
     # Monotonic: λ grows with severity (mean over the 5 constraints)
     means = [sum(cfg.LAMBDA_WARM[s]) for s in (1, 2, 3, 4, 5)]

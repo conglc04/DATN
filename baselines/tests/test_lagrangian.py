@@ -251,7 +251,7 @@ def test_dual_ascent_lambda_nonneg_projection():
 
 
 def test_dual_ascent_lambda_max_projection():
-    """Reviewer M4 (Gemini W06, 2026-05-27): λ projection clips at LAMBDA_MAX.
+    """Reviewer M4 (internal review, W06, 2026-05-27): λ projection clips at LAMBDA_MAX.
 
     Bounded projection Π_Λ(λ) = clip(λ, 0, LAMBDA_MAX) prevents dual blow-up
     under sustained constraint violations. Soft safety net (empirical λ ≤ 2.5).

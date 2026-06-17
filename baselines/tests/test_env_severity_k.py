@@ -116,7 +116,7 @@ def test_prb_split_k1_returns_full_allocation_regardless_of_beta():
 
 def test_prb_split_k3_monotonic_in_severity_with_beta_max():
     """K=3, severity_per_amb = (1,3,5), β=BETA_MAX, zero urgency tiebreaker:
-    PRB shares are non-decreasing in severity (softmax over β·severity_per_amb)."""
+    PRB shares are non-decreasing in severity (softmax over β·(severity_per_amb/5))."""
     K = 3
     env = ORANEnv(config=EnvConfig(K_ambulances=K), seed=0)
     env.reset(seed=0, options={"severity_per_amb": [1, 3, 5]})
