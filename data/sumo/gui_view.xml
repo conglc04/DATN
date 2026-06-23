@@ -1,0 +1,8 @@
+<viewsettings>
+    <scheme name="real world"/>
+    <vehicles vehicleMode="0" vehicleQuality="2"
+              minVehicleSize="80" vehicleExaggeration="80"
+              showBlinker="1"/>
+    <background backgroundColor="240,240,240"/>
+    <viewport x="2979.36" y="2225.94" zoom="800"/>
+</viewsettings>

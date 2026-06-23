@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <input>
+        <net-file value="bachmaiHN.net.xml"/>
+        <route-files value="ambulance_routes_k3.xml"/>
+    </input>
+    <time>
+        <begin value="0"/>
+        <end value="60"/>
+        <step-length value="0.1"/>
+    </time>
+    <gui_only>
+        <start value="true"/>
+        <delay value="100"/>
+        <gui-settings-file value="gui_view.xml"/>
+    </gui_only>
+</configuration>

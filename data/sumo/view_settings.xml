@@ -1,0 +1,27 @@
+<viewsettings>
+    <scheme name="ambulance_view">
+        <background backgroundColor="white" showGrid="0"/>
+        <edges laneEdgeMode="0" laneShowBorders="0" showBikeMarkings="1"
+               showLinkDecals="1" showRails="1" edgeParam="" edgeData=""
+               laneParam="" vehicleParam="" vehicleScaleParam=""
+               edgeDataScaling="1" laneEdgeExaggeration="1"
+               edgeMinSize="0" laneMinSize="0"
+               showLaneDirection="0" showSublanes="0"
+               spreadSuperposed="0" edgeValueHideCheck="0"
+               edgeValueHideThreshold="1"
+               colorSettingsFile="">
+            <colorScheme name="uniform">
+                <entry color="128,128,128" name="road"/>
+            </colorScheme>
+        </edges>
+        <vehicles vehicleMode="0" vehicleQuality="2"
+                  minVehicleSize="4" vehicleExaggeration="5"
+                  showBlinker="1" drawLaneChangePreference="0"
+                  showMinGap="0" showBTRange="0" showRouteIndex="0"
+                  showParkingInfo="0">
+            <colorScheme name="given/assigned vehicle color">
+                <entry color="255,0,0" name="ambulance"/>
+            </colorScheme>
+        </vehicles>
+    </scheme>
+</viewsettings>

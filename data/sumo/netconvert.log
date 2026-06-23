@@ -1,0 +1,114 @@
+Warning: Environment variable SUMO_HOME is not set, schema resolution will use slow website lookups.
+Warning: Environment variable SUMO_HOME is not set, using built in type maps.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '11707208'.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '37370973'.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '136258914'.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '136557767'.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '593642478'.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '593647269'.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '596788386'.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '597117003'.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '599994461'.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '601455488'.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '675260242'.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '709260530'.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '711134471'.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '771209161'.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '816208527'.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '838419185'.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '838425490'.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '838425491'.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '838425492'.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '881062562'.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '908118005'.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '944894013'.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '944894014'.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '946030629'.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '961664403'.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '1023619581'.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '1058963343'.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '1058963344'.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '1119786561'.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '1335894078'.
+Warning: Value of key 'maxspeed:type' is not numeric ('VN:urban') in edge '1451291384'.
+Warning: Discarding unusable type 'highway.construction' (first occurence for edge '152423977').
+Warning: Discarding unknown compound 'cycleway.crossing' in type 'cycleway.crossing|highway.cycleway' (first occurence for edge '863044702').
+Warning: Discarding unusable type 'highway.proposed' (first occurence for edge '1110572073').
+Warning: Not joining junctions 10108025400,6665950222 (only 1 entry node).
+Warning: Not joining junctions 10126308975,317969208,4670387287,8272696730 (7 incoming edges).
+Warning: Not joining junctions 10118488793,2218334196,5707599790 (parallel incoming -711132577#0,28102704).
+Warning: Not joining junctions 13928476974,13928476976 (6 incoming edges).
+Warning: Not joining junctions 10130399709,283136429,7835264875 (5 incoming edges).
+Warning: Reducing junction cluster 10130533955,4599745018,7920618647,7920618649,7920618652,7985603136,98027697 (5 incoming edges).
+Warning: Reducing junction cluster 10134947849,10134947854,10134947857,10134947858,10134947892,6658618495,6658618497,6658618499,6658618500,6658618502,98014785 (5 incoming edges).
+Warning: Reducing junction cluster 10137277933,10137277934,10137277937,1497971619,4592527909,5716337810,5716337812,5716337814 (5 incoming edges).
+Warning: Reducing junction cluster 10139319517,443033066,4631390669,5704543851,84806343 (6 incoming edges).
+Warning: Reducing junction cluster 10142638719,2474695878,320410409,5704543860,6648288797,6685527207 (5 incoming edges).
+Warning: Ambiguity in turnarounds computation at junction '2049258210'.
+Warning: Ambiguity in turnarounds computation at junction 'cluster_13045693889_7192356874'.
+Warning: Ambiguity in turnarounds computation at junction 'cluster_1314209709_5683715152_6659134177_6667988112'.
+Warning: Ambiguity in turnarounds computation at junction 'cluster_1494035973_5716408772'.
+Warning: Ambiguity in turnarounds computation at junction 'cluster_6666357217_6666357218'.
+Warning: Found sharp turn with radius 5.43 at the start of edge '-1040768100#1'.
+Warning: Found angle of 113.99 degrees at edge '-11837510#1', segment 17.
+Warning: Found angle of 123.03 degrees at edge '-1362305268#1', segment 5.
+Warning: Found angle of 106.10 degrees at edge '-180085325#16', segment 0.
+Warning: Found angle of 153.99 degrees at edge '-29313232', segment 5.
+Warning: Found angle of 111.19 degrees at edge '-374515768#3', segment 7.
+Warning: Found sharp turn with radius 6.92 at the start of edge '-708596422#1'.
+Warning: Found sharp turn with radius 8.26 at the start of edge '-763602940#2'.
+Warning: Found sharp turn with radius 4.53 at the end of edge '-889095092#2'.
+Warning: Found sharp turn with radius 8.25 at the start of edge '-889095266'.
+Warning: Found sharp turn with radius 5.35 at the start of edge '-889984928#1'.
+Warning: Found sharp turn with radius 5.43 at the end of edge '1040768100#0'.
+Warning: Found sharp turn with radius 6.35 at the end of edge '1417554099#2'.
+Warning: Found sharp turn with radius 6.41 at the end of edge '1417554099#3'.
+Warning: Found sharp turn with radius 8.19 at the end of edge '597668073#1'.
+Warning: Shape for junction '10685723750' has distance 22.72 to its given position.
+Warning: Shape for junction '12669487993' has distance 23.24 to its given position.
+Warning: Shape for junction '1884807231' has distance 23.67 to its given position.
+Warning: Shape for junction '1884807237' has distance 20.69 to its given position.
+Warning: Minor green from edge '1240127118#0' to edge '711138757' exceeds 19.44m/s. Maybe a left-turn lane is missing.
+Warning: Minor green from edge '457131694#3' to edge '711138761' exceeds 19.44m/s. Maybe a left-turn lane is missing.
+Warning: Minor green from edge '457131694#3' to edge '28103280#0' exceeds 19.44m/s. Maybe a left-turn lane is missing.
+Warning: Minor green from edge '-1240182998#1' to edge '-1240127118#2' exceeds 19.44m/s. Maybe a left-turn lane is missing.
+Warning: Minor green from edge '-1240182998#1' to edge '711138761' exceeds 19.44m/s. Maybe a left-turn lane is missing.
+Warning: The traffic light '103011372' does not control any links; it will not be build.
+Warning: Could not build program '0' for traffic light '103011372'
+Warning: The traffic light '103012143' does not control any links; it will not be build.
+Warning: Could not build program '0' for traffic light '103012143'
+Warning: The traffic light '104766006' does not control any links; it will not be build.
+Warning: Could not build program '0' for traffic light '104766006'
+Warning: The traffic light '11045663143' does not control any links; it will not be build.
+Warning: Could not build program '0' for traffic light '11045663143'
+Warning: The traffic light '2105986488' does not control any links; it will not be build.
+Warning: Could not build program '0' for traffic light '2105986488'
+Warning: The traffic light '4023205756' does not control any links; it will not be build.
+Warning: Could not build program '0' for traffic light '4023205756'
+Warning: The traffic light '5710231830' does not control any links; it will not be build.
+Warning: Could not build program '0' for traffic light '5710231830'
+Warning: The traffic light '6600677543' does not control any links; it will not be build.
+Warning: Could not build program '0' for traffic light '6600677543'
+Warning: The traffic light '8272696906' does not control any links; it will not be build.
+Warning: Could not build program '0' for traffic light '8272696906'
+Warning: The traffic light '9970440452' does not control any links; it will not be build.
+Warning: Could not build program '0' for traffic light '9970440452'
+Warning: Speed of turning connection '11550678_0->711134054_0' reduced by 22.15 due to turning radius of 5.76 (length=9.91, angle=129.44).
+Warning: Speed of straight connection '11550678_0->1236782073_0' reduced by 11.90 due to turning radius of 45.85 (length=15.97, angle=35.31).
+Warning: Speed of straight connection '1107122305#0_0->-11007920#2_0' reduced by 13.21 due to turning radius of 25.29 (length=10.55, angle=39.67).
+Warning: Speed of straight connection '1107122307#0_0->1158120932#0_0' reduced by 15.29 due to turning radius of 17.14 (length=7.04, angle=39.68).
+Warning: Speed of straight connection '1107122307#0_0->1158120932#0_1' reduced by 13.90 due to turning radius of 22.40 (length=9.30, angle=39.68).
+Warning: Intersecting left turns at junction '13928476974' from lane '1528449082#0_0' and lane '-1528449082#1_0' (increase junction radius to avoid this).
+Warning: Intersecting left turns at junction '13928476976' from lane '1511023258#0_0' and lane '-1511023258#2_0' (increase junction radius to avoid this).
+Warning: Intersecting left turns at junction '642960788' from lane '50536193#2_0' and lane '-50536193#13_0' (increase junction radius to avoid this).
+Warning: Intersecting left turns at junction 'cluster_10139319736_5710267069_6688284319_9580275371_995292777' from lane '1105753218#4_1' and lane '-85739368#3_0' (increase junction radius to avoid this).
+Warning: Intersecting left turns at junction 'cluster_11809445293_8265789055' from lane '889095100#0_0' and lane '-889095142#0_0' (increase junction radius to avoid this).
+Warning: 14 total messages of type: Found angle of % degrees at edge '%', segment %.
+Warning: 8 total messages of type: Found sharp turn with radius % at the end of edge '%'.
+Warning: 11 total messages of type: Found sharp turn with radius % at the start of edge '%'.
+Warning: 16 total messages of type: Intersecting left turns at junction '%' from lane '%' and lane '%' (increase junction radius to avoid this).
+Warning: 124 total messages of type: Minor green from edge '%' to edge '%' exceeds %m/s. Maybe a left-turn lane is missing.
+Warning: 79 total messages of type: Not joining junctions % (%).
+Warning: 18 total messages of type: Reducing junction cluster % (%).
+Warning: 145 total messages of type: Speed of % connection '%' reduced by % due to turning radius of % (length=%, angle=%).
+Success.

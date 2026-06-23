@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- generated on 2026-06-20 19:39:59.119509 by randomTrips.py UNKNOWN
+  options: <doubleminus>net-file /home/cong/Desktop/USB_BACKUP/Do-an/data/sumo/bachmaiHN.net.xml <doubleminus>output-trip-file /home/cong/Desktop/USB_BACKUP/Do-an/data/sumo/density/logs/bg_trips_light_smoke_k3.xml <doubleminus>begin 0 <doubleminus>end 400 <doubleminus>period 30.7692 <doubleminus>vehicle-class passenger <doubleminus>prefix bg_ <doubleminus>seed 42 <doubleminus>fringe-factor 10 <doubleminus>min-distance 100 <doubleminus>remove-loops
+-->
+<routes xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/routes_file.xsd">
+    <vType id="bg__passenger" vClass="passenger"/>
+    <trip id="bg_0" depart="0.00" from="28920292#0" to="-1158120938#0" type="bg__passenger"/>
+    <trip id="bg_1" depart="30.77" from="-598721079" to="-597668064#0" type="bg__passenger"/>
+    <trip id="bg_2" depart="61.54" from="596813208#0" to="465069897#2" type="bg__passenger"/>
+    <trip id="bg_3" depart="92.31" from="708601342" to="-173757038#1" type="bg__passenger"/>
+    <trip id="bg_4" depart="123.08" from="-889984884#1" to="-1190951615#0" type="bg__passenger"/>
+    <trip id="bg_5" depart="153.85" from="-397992225#15" to="136557830#0" type="bg__passenger"/>
+    <trip id="bg_6" depart="184.62" from="-1124683041" to="-597119951" type="bg__passenger"/>
+    <trip id="bg_7" depart="215.38" from="29046482#2" to="1513983845#7" type="bg__passenger"/>
+    <trip id="bg_8" depart="246.15" from="-397992427#2" to="28913703#0" type="bg__passenger"/>
+    <trip id="bg_9" depart="276.92" from="601418356#0" to="-1053834502#2" type="bg__passenger"/>
+    <trip id="bg_10" depart="307.69" from="600496147#1" to="597567665#1" type="bg__passenger"/>
+    <trip id="bg_11" depart="338.46" from="-684282663" to="-37861224#2" type="bg__passenger"/>
+    <trip id="bg_12" depart="369.23" from="889984921#0" to="-813364991#24" type="bg__passenger"/>
+    <trip id="bg_13" depart="400.00" from="-136255950#1" to="-220307071#4" type="bg__passenger"/>
+</routes>

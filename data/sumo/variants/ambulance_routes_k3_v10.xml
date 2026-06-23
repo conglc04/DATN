@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<routes xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/routes_file.xsd">
+    <vType id="ambulance" vClass="emergency" maxSpeed="16.67" accel="3.0" decel="4.5" length="5.0" />
+    <trip id="amb_0" type="ambulance" from="705794058#5" to="37370971#0" depart="0.00" departSpeed="max" />
+    <trip id="amb_1" type="ambulance" from="37802631#3" to="37370971#0" depart="0.00" departSpeed="max" />
+    <trip id="amb_2" type="ambulance" from="11007201#13" to="37370971#0" depart="0.00" departSpeed="max" />
+</routes>

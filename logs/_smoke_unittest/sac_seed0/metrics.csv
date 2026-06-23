@@ -1,0 +1,2 @@
+step,ep_reward,ep_reward_normalized,mean_e2e_ms,viol_rate,mean_embb_mbps,c3_viol_rate,mean_aoi_ms,aoi_viol_rate,mean_n_active,active_mac_ticks_amb0,severity_per_amb,lambda_global_C1_0,lambda_global_C2_0,lambda_global_C4_0,lambda_global_C5_0,lambda_global_C3_shared
+0,578.6420423032449,115.46565012113365,0.5617663100590908,0.0,77.6375821237477,0.034,16.488499999999163,0.0,1.0,2000.0,[2],0.10280883265804733,0.07999950000001262,0.025824425001861533,0.019994999999762512,0.016618120888233185
