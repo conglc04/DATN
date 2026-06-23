@@ -4,7 +4,7 @@
 
 ## Đã xây / verify
 - 100-ep smoke cho PPO + TD3 + SAC (B3-RCPO cũ đã loại).
-- Verify constraint dynamics: **URLLC corner** (viol_C1+C2 thấp, viol_C3 cao) vs **eMBB corner** (ngược lại); λ-trajectory khớp active-set theo phase (λ_1+λ_2 > λ_3 @ φ₃).
+- Verify constraint dynamics: **URLLC corner** (viol_C1+C2 thấp, viol_C3 cao) vs **eMBB corner** (ngược lại); λ-trajectory khớp active-set theo severity (λ_1+λ_2 > λ_3 @ severity-5).
 
 ## Đã GỠ (post-cleanup, master plan D13)
 - ❌ **β_qp sweep** (113-run β_qp diagnostic) — gỡ hoàn toàn cùng NSF-distillation; safety filter → closed-form projection (no learnable β_qp). KHÔNG còn trong scope.

@@ -92,3 +92,16 @@ def entropy_bonus(dist) -> torch.Tensor:
     For continuous Normal: sum-over-action-dim then mean-over-batch.
     """
     return dist.entropy().sum(-1).mean()
+
+
+def approx_kl(old_log_probs: torch.Tensor, new_log_probs: torch.Tensor) -> torch.Tensor:
+    """Approximate KL(π_old || π_new) ≈ mean(old_lp - new_lp) (Schulman 2020 blog)."""
+    return (old_log_probs - new_log_probs).mean()
+
+
+def explained_variance(values: np.ndarray, returns: np.ndarray) -> float:
+    """EV = 1 - Var(returns - values) / Var(returns). 1.0 = perfect critic."""
+    var_ret = np.var(returns)
+    if var_ret < 1e-8:
+        return 0.0
+    return float(1.0 - np.var(returns - values) / var_ret)

@@ -304,12 +304,12 @@ class TestMixAndAggregate:
 
 
 # ============================================================
-# Integration sanity: channel + queue at φ₃
+# Integration sanity: channel + queue at severity-5
 # ============================================================
 
 
 class TestPhase3SanitySingleCell:
-    """Sanity: at φ₃ with r_min^URLLC=0.6, single ambulance, expect HOL < 1ms."""
+    """Sanity: at severity-5 with r_min^URLLC=0.6, single ambulance, expect HOL < 1ms."""
 
     def test_e2e_breakdown_under_1ms(self):
         from env.channel_model import capacity_per_prb_bps
@@ -320,13 +320,13 @@ class TestPhase3SanitySingleCell:
         sinr_db_val = 15.0
         capacity = capacity_per_prb_bps(sinr_db_val)   # ~0.93 * log2(1+31.6) → ≈ 3.5 Mbps
 
-        # PRB for URLLC at φ₃: r_min = 0.6 → 0.6 * 273 = 163 PRB
+        # PRB for URLLC at severity-5: r_min = 0.6 → 0.6 * 273 = 163 PRB
         urllc_prb = int(0.6 * P_TOTAL)
 
         # M/G/1 with λ=50 pkt/s (DENM steady) + 400B packets
-        q = MG1Queue(name="urllc_phi3", arrival_rate=50.0, mean_packet_bits=400 * 8)
+        q = MG1Queue(name="urllc_sev5", arrival_rate=50.0, mean_packet_bits=400 * 8)
         q.update_service_rate(urllc_prb, capacity)
 
         assert q.is_stable
         e2e = D_DET + D_FH + D_BH + q.hol_delay()
-        assert e2e < 1e-3, f"E2E at φ₃ = {e2e*1e3:.3f}ms exceeds 1ms target"
+        assert e2e < 1e-3, f"E2E at severity-5 = {e2e*1e3:.3f}ms exceeds 1ms target"

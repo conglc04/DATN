@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import importlib
 
+import pytest
+
 
 def test_package_imports():
     """All scaffolded packages must be importable."""
@@ -66,9 +68,9 @@ def test_lambda_warm():
     """λ_warm warm-start for severity 5 IMMEDIATE (tightest) matches docs/05."""
     from utils import config as cfg
 
-    # C3 slot (index 2) is 0.02 — non-increasing in severity, co-directional with
-    # the non-increasing d3_embb floor (audit 2026-06-17). sev5 has the lowest
-    # eMBB floor (10 Mbps), easily met ⟹ lowest C3 warm-start dual.
+    # C3 slot (index 2) is FIXED at 0.02 for every severity (Gate 7, 2026-06-20),
+    # co-directional with the fixed severity-independent 10 Mbps d3_embb floor
+    # (rarely binding ⟹ uniform small warm-start dual).
     expected_immediate = [1.80, 2.20, 0.02, 1.50, 2.00]
     assert cfg.LAMBDA_WARM[5] == expected_immediate, f"λ_warm[IMMEDIATE] mismatch: {cfg.LAMBDA_WARM[5]}"
     # Monotonic: λ grows with severity (mean over the 5 constraints)
@@ -85,12 +87,10 @@ def test_rl_hyperparams():
     assert cfg.GAE_LAMBDA == 0.95
     assert cfg.PPO_K_EPOCHS == 10
     assert cfg.MINIBATCH_SIZE == 64
-    # Borkar 2008 two-timescale: α_πH ≪ α_πL (ratio 0.01, 2 orders apart).
-    # Old test asserted 1e-4 / 3e-4 (ratio 0.33) — corrected per
-    # docs/13 Phase 1.4 Borkar review (2026-05-20).
-    assert cfg.LR_PI_H == 1e-5
-    assert cfg.LR_PI_L == 1e-3
-    assert cfg.LR_PI_H / cfg.LR_PI_L == 1e-2
+    # Two-timescale ordering (Akyıldız 2024; Borkar 2008 vắng corpus): α_πH < α_λ < α_πL.
+    assert cfg.LR_PI_H == 3e-5
+    assert cfg.LR_PI_L == 3e-4
+    assert cfg.LR_PI_H / cfg.LR_PI_L == pytest.approx(0.1)
 
 
 def test_phase2_constants_w05():
@@ -139,7 +139,7 @@ def test_worker_steps_per_manager():
 
     MAC tick    0.5 ms (T_TTI_SEC)
     Worker xApp 10 ms = 20 MAC ticks (MAC_TICKS_PER_WORKER)
-    Manager rApp 100 ms sim = 10 Worker steps (WORKER_STEPS_PER_MANAGER)
+    Manager 100 ms = 10 Worker steps (WORKER_STEPS_PER_MANAGER)
     """
     from utils import config as cfg
 

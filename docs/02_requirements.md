@@ -16,7 +16,7 @@ Ngưỡng từ **3GPP TS 22.261**. **Severity bệnh nhân** (5 mức, exogenous
 - **ε rare-event**: KHÔNG claim đạt 1e-5 empirical (rule-of-three, [06](06_validation.md)).
 
 ## Severity (5-level triage, exogenous)
-5 mức **Non-urgent / Semi-urgent / Urgent / Emergency / Immediate** theo **ATS — Australasian Triage Scale** ✅[`ATS — Australasian College for Emergency Medicine (ACEM)`] (internal `sev 1..5` = lỏng→chặt, ánh xạ ngược số hiệu ATS: sev 1=ATS 5 … sev 5=ATS 1). `severity_per_amb` (K,) sampled độc lập per ambulance, **cố định trong 1 episode** (1s; severity không đổi kịp trong 1s), **random giữa các episode** (lệch trung-nặng). `severity_ref := max(severity_per_amb)` là biến **exogenous Markov shared** đưa vào obs (one-hot [10:15]) ⟹ quyết định ngưỡng QoS shared (`SEVERITY_QOS`, `α_eMBB(sev)`, `λ_warm[sev]`); `severity_per_amb[k]` per-xe (obs per-amb block `severity_norm_k`) ⟹ ngưỡng C1/C2/C4/C5 per-xe + thứ tự ưu tiên C6 qua β/Π_feasible (K≥2). **KHÔNG mô phỏng giá trị sinh hiệu**. Phân biệt scene/transport (mobility) đã nằm trong `speed` obs. Chi tiết [W16](weeks/W16_pha1_severity_triage.md).
+5 mức **Non-urgent / Semi-urgent / Urgent / Emergency / Immediate** theo **ATS — Australasian Triage Scale** ✅[`ATS — Australasian College for Emergency Medicine (ACEM)`] (internal `sev 1..5` = lỏng→chặt, ánh xạ ngược số hiệu ATS: sev 1=ATS 5 … sev 5=ATS 1). `severity_per_amb` (K,) sampled độc lập per ambulance, **cố định trong cả episode** (= trọn hành trình MCI; chẩn đoán triage gán 1 lần lúc tiếp cận, không đổi giữa đường), **random giữa các episode** (lệch trung-nặng). `severity_ref := max(severity_per_amb)` là biến **exogenous Markov shared** đưa vào obs (one-hot [10:15]) ⟹ quyết định ngưỡng QoS shared (`SEVERITY_QOS`, `α_eMBB(sev)`, `λ_warm[sev]`); `severity_per_amb[k]` per-xe (obs per-amb block `severity_norm_k`) ⟹ ngưỡng C1/C2/C4/C5 per-xe + thứ tự ưu tiên C6 qua β/Π_feasible (K≥2). **KHÔNG mô phỏng giá trị sinh hiệu**. Phân biệt scene/transport (mobility) đã nằm trong `speed` obs. Chi tiết [W16](weeks/W16_pha1_severity_triage.md).
 
 ## Traffic Classes
 - **URLLC (xe)**: F=1 luồng tổng hợp `ambulance_status`/ambulance (2026-06-14 consolidation, gộp HR/SpO2/ECG/DENM cũ) — periodic status bundle; LCFS+drop_old, AoI-aware.
@@ -25,7 +25,7 @@ Ngưỡng từ **3GPP TS 22.261**. **Severity bệnh nhân** (5 mức, exogenous
 - **eMBB (bystander nền)**: throughput slice, reward target. URLLC ∩ eMBB = ∅ [Alsenwi §II.A].
 
 ## Scenarios tới hạn
-- **S1 — MCI hội tụ @ Bạch Mai** (chính, D22): 3 xe đồng trú **1 cell 300m** trên đường Giải Phóng, **severity khác nhau** (mỗi xe 1 bệnh nhân), hội tụ BV Bạch Mai → triage contention (C6 ordering).
+- **S1 — MCI hội tụ @ Bạch Mai** (chính, D22): 3 xe đồng trú **1 cell 1km (UMa)** trên đường Giải Phóng, **severity khác nhau** (mỗi xe 1 bệnh nhân), hội tụ BV Bạch Mai → triage contention (C6 ordering).
 - **S2 — Collision burst**: DENM spike + severity cao (Emergency/Immediate).
 - **S3 — Rush hour**: density sweep {light/medium/heavy} (SUMO).
 - **S4 — Bystander spike**: eMBB nền tăng đột biến.

@@ -28,9 +28,40 @@ Key API:
         — severity-change check + sync (no-op if unchanged)
     accumulate(c_vec, d_phi)            — per-Worker-step interval-window add
     on_manager_step_end()               — dual ascent + reset win_c
-    augmented_reward(r, c_vec, d_phi)   — r - Σ_j λ_local[j] · (c_j - d_j^sev)
+    augmented_reward(r, c_vec, d_phi)   — r - Σ_j λ_local[j] · max(0, c_j - d_j^sev)
     on_episode_end(severity_per_amb, severity_ref)
         — EMA-flush λ_warm at episode boundary
+
+Constraint taxonomy (CMDP formulation — load-bearing definitions):
+    C1  E[D_e2e^k] ≤ D_max^{sev_k}         MEAN    per-amb   delay
+    C2  P(D > D_max) ≤ ε^{sev_k}            CHANCE  per-amb   delay-tail
+    C3  E[R_eMBB] ≥ 10 Mbps                 MEAN    shared    eMBB floor
+    C4  E[AoI_k] ≤ AoI_max^{sev_k}          MEAN    per-amb   AoI
+    C5  P(AoI > AoI_max) ≤ ε_AoI^{sev_k}   CHANCE  per-amb   AoI-tail
+    C3 is a MEAN-throughput constraint (NOT a chance constraint).
+
+Dual-ascent estimator — hybrid Option-a/Option-b (audit 2026-06-21):
+    C1 (delay mean), C4 (AoI mean), C3 (eMBB floor) use the Option-b
+    interval-window (win_c/win_steps, reset every Manager step, N≈200
+    MAC-tick samples). N=200 is adequate for MEAN-type constraints.
+
+    C2 (delay tail), C5 (AoI tail) are CHANCE constraints
+    Pr[violation] <= eps with eps as low as 1e-5 (severity 4-5). A
+    Bernoulli rate is only resolvable to within ~1/N: N=200 cannot even
+    register a single occurrence of a 1e-5 event (it would take ~500
+    Manager-step windows on average to see ONE violation), so the
+    Option-b gradient for C2/C5 is almost always a frozen "all-satisfied"
+    signal that occasionally spikes 100-500x when a rare violation lands
+    inside the 200-sample window — a high-variance, mostly-uninformative
+    estimator at the target eps scale.
+    Fix: C2/C5 use a separate EPISODE-CUMULATIVE estimator (cum_c/
+    cum_steps, Option a — never reset mid-episode, only at episode
+    boundaries) so N grows with elapsed episode time (N≈200 at the first
+    Manager step, N≈200,000+ by mid-episode), which is the textbook
+    consistent estimator for a fixed Bernoulli rate and is the only way
+    to resolve probabilities at the 1e-4/1e-5 scale within an episode.
+    Severity (hence eps) is fixed per episode, so an episode-cumulative
+    mean never mixes samples from different constraint regimes.
 
 Used by:
     - solvers/td3.py, solvers/sac.py (Phase 3 sibling solvers, W07/B7)
@@ -56,9 +87,8 @@ from utils.config import (
     build_lambda_warm_vector,
 )
 
-# Legacy 5-dim constants (C1-C5), retained for backward compat with standalone
-# CMDPLagrangian(n=5, ...) usages (solvers/no_phase_ppo.py, ppo_cmdp_flat.py)
-# and any pre-existing 5-dim tests.
+# Legacy 5-dim constants (C1-C5), retained for backward compat with ablation
+# variants (solvers/pa_ppo_soft.py, ppo_cmdp_flat.py) and pre-existing tests.
 N_HARD_CONSTRAINTS: int = 5
 DEFAULT_BETA_EMA: float = 0.05          # λ_warm slow EMA decay (Phase 3.2.6)
 CONSTRAINT_DUAL_SCALES: np.ndarray = np.asarray(
@@ -69,16 +99,22 @@ CONSTRAINT_DUAL_SCALES: np.ndarray = np.asarray(
 
 @dataclass
 class LambdaState:
-    """K-aware (4K+1)-dim Lagrangian state for PPO + flat solvers.
+    """K-aware (4K+1)-dim Lagrangian state for all 3 sibling solvers (PPO/TD3/SAC).
 
     Embeds Phase 3.4 critical fixes (docs/13):
       - Fix Error 1 (λ-Overwriting): severity sync sets BOTH global + local
       - Fix Error 2 (interval-window): win_c reset sau mỗi Manager step,
-        Option b (last W samples), NOT cumulative Option a
+        Option b (last W samples), NOT cumulative Option a — used for
+        C1/C4/C3 (mean-type constraints; N≈200 is adequate)
+      - Tail-estimator fix (audit 2026-06-21): cum_c/cum_steps, Option a
+        (episode-cumulative, never reset mid-episode) — used for C2/C5
+        (chance constraints with eps down to 1e-5; N≈200 cannot resolve
+        that scale, see module docstring)
 
     Attributes:
         K                  Number of ambulances (n_constraints = 4K+1)
-        alpha_lambda       Dual learning rate (Phase 2.3.3 locked = 1e-4)
+        alpha_lambda       Dual learning rate (2e-4; config.ALPHA_LAMBDA_DUAL SSOT —
+                            A/B 5e-4 reverted to 2e-4 on 2026-06-22
         beta_ema           λ_warm slow EMA decay
         worker_steps_per_manager  W = 10 (Phase 1.4 ratio)
         force_zero_warm    Exp3 ablation: always warm-start from zero and
@@ -86,8 +122,11 @@ class LambdaState:
         lambda_global      Current global λ (R^(4K+1))
         lambda_local       Worker-side λ snapshot (R^(4K+1))
         lambda_warm        Severity-tuple warm-start cache {severity_per_amb: R^(4K+1)}
-        win_c              Interval-window subgradient accumulator (R^(4K+1))
+        win_c              Interval-window subgradient accumulator (R^(4K+1)) — C1/C4/C3
         win_steps          Worker steps elapsed in current Manager window
+        cum_c              Episode-cumulative subgradient accumulator (R^(4K+1)) — C2/C5
+        cum_steps          Worker steps elapsed since episode start (never reset
+                            mid-episode; only at reset_episode/on_episode_end)
         sev_prev           Previously observed severity_per_amb tuple (None = uninitialized)
         sev_ref_prev       Previously observed severity_ref (= max(severity_per_amb))
     """
@@ -105,6 +144,8 @@ class LambdaState:
     lambda_warm: dict[tuple[int, ...], np.ndarray] = field(default_factory=dict)
     win_c: np.ndarray | None = None
     win_steps: int = 0
+    cum_c: np.ndarray | None = None
+    cum_steps: int = 0
     sev_prev: tuple[int, ...] | None = None
     sev_ref_prev: int = 0
 
@@ -117,6 +158,12 @@ class LambdaState:
             self.lambda_local = np.zeros(self.n_constraints, dtype=np.float64)
         if self.win_c is None:
             self.win_c = np.zeros(self.n_constraints, dtype=np.float64)
+        if self.cum_c is None:
+            self.cum_c = np.zeros(self.n_constraints, dtype=np.float64)
+        # C2 (delay tail) at indices [K, 2K), C5 (AoI tail) at [3K, 4K).
+        self._tail_mask = np.zeros(self.n_constraints, dtype=bool)
+        self._tail_mask[self.K:2 * self.K] = True
+        self._tail_mask[3 * self.K:4 * self.K] = True
 
     # ------------------------------------------------------------------
     # Warm-start table lookups
@@ -146,6 +193,8 @@ class LambdaState:
         self.lambda_local = warm.copy()
         self.win_c = np.zeros(self.n_constraints, dtype=np.float64)
         self.win_steps = 0
+        self.cum_c = np.zeros(self.n_constraints, dtype=np.float64)
+        self.cum_steps = 0
         self.sev_prev = tuple(severity_per_amb)
         self.sev_ref_prev = severity_ref
 
@@ -173,6 +222,10 @@ class LambdaState:
         self.lambda_local = warm.copy()
         self.win_c = np.zeros(self.n_constraints, dtype=np.float64)
         self.win_steps = 0
+        # Severity changed → eps regime changed → cumulative C2/C5 estimator
+        # from the old severity is no longer valid; reset it too.
+        self.cum_c = np.zeros(self.n_constraints, dtype=np.float64)
+        self.cum_steps = 0
         self.sev_prev = sev_key
         self.sev_ref_prev = severity_ref
 
@@ -200,6 +253,8 @@ class LambdaState:
                 self.sev_ref_prev = sev_ref
         self.win_c = np.zeros(self.n_constraints, dtype=np.float64)
         self.win_steps = 0
+        self.cum_c = np.zeros(self.n_constraints, dtype=np.float64)
+        self.cum_steps = 0
 
     def _ema_save_current_severity(self) -> None:
         if self.force_zero_warm or self.sev_prev is None:
@@ -214,10 +269,17 @@ class LambdaState:
     def on_manager_step_end(self) -> dict[str, float]:
         """Dual ascent + reset win_c (Phase 2.3.3 + Fix Error 2).
 
-        g_hat = win_c / win_steps     (mean interval-window deviation)
+        Hybrid estimator (audit 2026-06-21 — see module docstring):
+          C1/C4/C3 (mean constraints): g_hat = win_c/win_steps, Option-b
+              interval-window, N≈200 — adequate, reset every Manager step.
+          C2/C5 (tail/chance constraints, eps down to 1e-5): g_hat =
+              cum_c/cum_steps, Option-a episode-cumulative — N grows with
+              elapsed episode time; N≈200 cannot resolve a 1e-5 rate.
+
         λ_global ← max(0, λ_global + α_λ * g_hat)
         λ_local ← λ_global.copy()     (push to Worker)
         win_c, win_steps ← 0          (RESET — Option b interval-window)
+        cum_c, cum_steps ← unchanged  (NOT reset — Option a, episode-cumulative)
 
         Returns diagnostic dict (subgradient + λ snapshot for logging).
         """
@@ -227,7 +289,9 @@ class LambdaState:
                 "subgradient_mean": 0.0,
                 "lambda_global_mean": float(np.mean(self.lambda_global)),
             }
-        g_hat = self.win_c / self.win_steps
+        g_hat_mean = self.win_c / self.win_steps
+        g_hat_tail = self.cum_c / self.cum_steps if self.cum_steps > 0 else g_hat_mean
+        g_hat = np.where(self._tail_mask, g_hat_tail, g_hat_mean)
         # Reviewer M4 (W06): bounded projection Π_Λ(·) — clip to [0, LAMBDA_MAX].
         # Prevents dual blow-up under sustained violations. Empirical λ ≤ 2.5
         # → LAMBDA_MAX=10 is soft safety net. See docs/13 §2.3.3.
@@ -241,7 +305,8 @@ class LambdaState:
             "subgradient_mean": float(np.mean(g_hat)),
             "lambda_global_mean": float(np.mean(self.lambda_global)),
         }
-        # Reset interval-window (Option b — Phase 2.3.5)
+        # Reset interval-window (Option b — Phase 2.3.5). cum_c/cum_steps
+        # (Option a, C2/C5) are intentionally NOT reset here.
         self.win_c = np.zeros(self.n_constraints, dtype=np.float64)
         self.win_steps = 0
         return out
@@ -255,9 +320,16 @@ class LambdaState:
 
         Called every Worker step trong loop. c_vec + d_phi come from env.step()
         info dict (per Phase 2.2.1 Master Table lookup), both (4K+1,).
+
+        Feeds BOTH estimators: win_c (Option-b, reset every Manager step,
+        used for C1/C4/C3) and cum_c (Option-a, episode-cumulative, used
+        for C2/C5 — see module docstring for why tail constraints need it).
         """
-        self.win_c += self._normalized_deviation(c_vec, d_phi)
+        dev = self._normalized_deviation(c_vec, d_phi)
+        self.win_c += dev
         self.win_steps += 1
+        self.cum_c += dev
+        self.cum_steps += 1
 
     def _normalized_deviation(self, c_vec: np.ndarray, d_phi: np.ndarray) -> np.ndarray:
         c = np.asarray(c_vec, dtype=np.float64)
@@ -278,15 +350,74 @@ class LambdaState:
         c_vec: np.ndarray,
         d_phi: np.ndarray,
     ) -> float:
-        """Phase 3.2.1 augmented reward (pure Lagrangian, NO QP distillation here).
+        """Phase 3.2.1 augmented reward — hinge penalty (one-sided).
 
-        r_aug = r - Σ_j λ_local[j] · (c_j - d_j^φ_t)
+        r_aug = r - Σ_j λ_local[j] · max(0, c_j - d_j^φ_t)
 
-        Signed deviation (NOT max(0, ...)). QP penalty term is in actor loss
-        (Phase 3.2.1 Fix Error 1 from earlier session).
+        Hinge, NOT signed deviation. Fix (2026-06-22, bonus-masking audit):
+        signed deviation let slack mean-constraints (C1/C4 — mean delay/AoI
+        usually far under threshold) contribute a large NEGATIVE penalty
+        (= reward bonus) that swamped the much smaller, correctly-signed
+        tail-constraint (C2/C5) penalties (measured 131x at severity 5 via
+        penalty_breakdown). Hinge means a slack constraint contributes
+        exactly 0 — no bonus, only real violations are penalized. The
+        dual-ascent subgradient estimator (accumulate/on_manager_step_end,
+        via _normalized_deviation) is UNCHANGED — it must stay signed so λ
+        can still descend when a constraint is slack.
         """
-        penalty = float(np.dot(self.lambda_local, self._normalized_deviation(c_vec, d_phi)))
+        dev = self._normalized_deviation(c_vec, d_phi)
+        penalty = float(np.dot(self.lambda_local, np.maximum(0.0, dev)))
         return float(reward) - penalty
+
+    def penalty_breakdown(self, c_vec: np.ndarray, d_phi: np.ndarray) -> np.ndarray:
+        """Per-constraint hinge penalty vector  λ_local[j]·max(0, (c_j−d_j)/scale_j)  (4K+1,).
+
+        Element-wise terms whose sum is exactly the scalar penalty subtracted in
+        augmented_reward (so Σ breakdown == r_base − r_aug). All entries are
+        >= 0: a slack constraint (c < d) contributes exactly 0 (no bonus); a
+        violated constraint (c > d) contributes its positive penalty. Does NOT
+        mutate state.
+        """
+        dev = self._normalized_deviation(c_vec, d_phi)
+        return self.lambda_local * np.maximum(0.0, dev)
+
+    # ------------------------------------------------------------------
+    # Checkpoint support (P5 fix)
+    # ------------------------------------------------------------------
+
+    def state_dict(self) -> dict:
+        """Serialize full LambdaState for checkpoint."""
+        warm_serial = {str(k): v.tolist() for k, v in self.lambda_warm.items()}
+        return {
+            "lambda_global": self.lambda_global.tolist(),
+            "lambda_local": self.lambda_local.tolist(),
+            "lambda_warm": warm_serial,
+            "win_c": self.win_c.tolist(),
+            "win_steps": self.win_steps,
+            "cum_c": self.cum_c.tolist(),
+            "cum_steps": self.cum_steps,
+            "sev_prev": list(self.sev_prev) if self.sev_prev is not None else None,
+            "sev_ref_prev": self.sev_ref_prev,
+        }
+
+    def load_state_dict(self, d: dict) -> None:
+        """Restore LambdaState from checkpoint."""
+        self.lambda_global = np.array(d["lambda_global"], dtype=np.float64)
+        self.lambda_local = np.array(d["lambda_local"], dtype=np.float64)
+        self.win_c = np.array(d["win_c"], dtype=np.float64)
+        self.win_steps = d["win_steps"]
+        self.cum_c = np.array(
+            d.get("cum_c", np.zeros(self.n_constraints).tolist()), dtype=np.float64
+        )
+        self.cum_steps = d.get("cum_steps", 0)
+        sp = d.get("sev_prev")
+        self.sev_prev = tuple(sp) if sp is not None else None
+        self.sev_ref_prev = d.get("sev_ref_prev", 0)
+        warm_raw = d.get("lambda_warm", {})
+        self.lambda_warm = {}
+        for k_str, v in warm_raw.items():
+            sev_key = tuple(int(x) for x in k_str.strip("()[] ").split(",") if x.strip())
+            self.lambda_warm[sev_key] = np.array(v, dtype=np.float64)
 
     # ------------------------------------------------------------------
     # Diagnostics
@@ -308,6 +439,6 @@ class LambdaState:
         return (
             f"LambdaState(K={self.K}, n={self.n_constraints}, α_λ={self.alpha_lambda:.0e}, "
             f"β_ema={self.beta_ema}, W={self.worker_steps_per_manager}, "
-            f"sev_prev={self.sev_prev}, win_steps={self.win_steps}, "
+            f"sev_prev={self.sev_prev}, win_steps={self.win_steps}, cum_steps={self.cum_steps}, "
             f"λ_global={self.lambda_global.round(3).tolist()})"
         )

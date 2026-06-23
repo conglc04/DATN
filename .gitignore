@@ -20,5 +20,11 @@ figures/
 # Reference corpus (large static PDFs — kept locally, not in git)
 documents/
 
+# Large generated/runtime data
+data/
+checkpoints/
+artifacts/
+logs/
+
 # OS
 .DS_Store

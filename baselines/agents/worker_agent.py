@@ -1,23 +1,23 @@
 """Worker agent (xApp π_L) for PPO.
 
 Phase 3.3.3 / 3.3.4: low-level policy operating on full Worker state
-(obs_dim = 20 + 10K + F; 31-dim for K=1, F=1 — per-ambulance severity_k epic
-2026-06-15, exposes delay_norm_k, AoI_norm_k, severity_k_norm and per-amb
-λ_local slots) every Worker step (T_L = 10 ms sim = 20 MAC ticks).
+(obs_dim = 20 + 11K + F; 32-dim for K=1, F=1 — per-ambulance severity_k epic
+2026-06-15, exposes delay_norm_k, AoI_norm_k, severity_k_norm, per-amb λ_local
+slots and active_mask_k) every Worker step (T_L = 10 ms sim = 20 MAC ticks).
 
-Output action dimensions (Phase 2.3.2, extended B5 2026-06-15):
-    a_L = (Δr_min, Δr_max, r_ded_ratio, w_intra^C1, w_intra^C2, w_intra^C3[, β])
-    6-dim continuous for K=1 (unchanged), 7-dim for K>=2 (adds β priority
-    temperature for the Π_feasible intra-slice PRB split). Decoded via
-    per-component squashing:
-        Δr_min, Δr_max ∈ [-0.1, +0.1]    (0.1 · tanh)
-        r_ded_ratio    ∈ [0, 1]          (sigmoid; r_ded = r_ded_ratio · r_min)
-        w_intra^C1..C3 ∈ Δ³ simplex       (softmax)
-        β (K>=2 only) ∈ [BETA_MIN, BETA_MAX]  (sigmoid)
+Output action dimensions (pure-RL intra-slice, 2026-06-21):
+    Manager owns inter-slice URLLC/eMBB budget. Worker owns only intra-URLLC
+    priority — emitted as PURE per-vehicle logits (no β temperature slot;
+    pure-RL allocation has no urgency-temperature term).
+        K=1: 1-dim no-op continuous action; the single active ambulance gets
+             the full URLLC budget regardless of the action value.
+        K>=2: a_L = (ℓ_0, ..., ℓ_{K-1}) — K raw logits; env applies
+              softmax(ℓ) → weights → PRB split. No rule, no N_req, no λ in
+              the allocation path (severity awareness is fully learned).
 
 Reference:
     - docs/13_methodology_walkthrough.md Phase 3.3.3 (Worker arch)
-    - Three-rate hierarchy locked: α_πL=1e-3 (Worker fastest)
+    - Three-rate hierarchy locked: α_πL=3e-4 (Worker fastest; config.LR_PI_L SSOT)
 """
 
 from __future__ import annotations
@@ -29,10 +29,11 @@ import torch
 import torch.nn as nn
 from torch.distributions import Normal
 
-from agents.ppo_core import compute_gae, entropy_bonus, ppo_clip_loss, value_loss
+from agents.ppo_core import (
+    approx_kl, compute_gae, entropy_bonus, explained_variance,
+    ppo_clip_loss, value_loss,
+)
 from utils.config import (
-    BETA_MAX,
-    BETA_MIN,
     GAE_LAMBDA,
     GAMMA_WORKER,
     LR_PI_L,
@@ -42,16 +43,10 @@ from utils.config import (
     PPO_K_EPOCHS,
 )
 
-WORKER_STATE_DIM_DEFAULT: int = 31   # 20 + 10K + F for K=1, F=1 (B5 severity_k epic 2026-06-15)
-WORKER_ACTION_DIM_DEFAULT: int = 6   # K=1 (unchanged); K>=2 uses WORKER_ACTION_DIM_K2PLUS=7 (adds beta)
-WORKER_ACTION_DIM_K2PLUS: int = 7
-# Component indices in the raw action vector
-IDX_DELTA_R_MIN: int = 0
-IDX_DELTA_R_MAX: int = 1
-IDX_R_DED_RATIO: int = 2
-IDX_W_INTRA_START: int = 3   # w_intra^C1, w_intra^C2, w_intra^C3 (indices 3..5)
-IDX_BETA: int = 6            # beta priority temperature (K>=2 only)
-DELTA_R_SCALE: float = 0.1   # Δr_min, Δr_max bound (Phase 2.3.2)
+WORKER_STATE_DIM_DEFAULT: int = 32   # 20 + 11K + F for K=1, F=1 (+active_mask_k 2026-06-23)
+WORKER_ACTION_DIM_DEFAULT: int = 1   # K=1 no-op; K>=2 uses K pure logits (no β slot)
+WORKER_ACTION_DIM_K3: int = 3        # K=3 → 3 per-vehicle logits
+IDX_PRB_LOGITS_START: int = 0        # logits start at index 0 (no β prefix)
 
 
 def _make_mlp(in_dim: int, hidden: Sequence[int], out_dim: int) -> nn.Sequential:
@@ -66,7 +61,7 @@ def _make_mlp(in_dim: int, hidden: Sequence[int], out_dim: int) -> nn.Sequential
 
 
 class WorkerActor(nn.Module):
-    """π_L — Gaussian policy over 6-dim continuous a_L (raw, pre-squash)."""
+    """π_L — Gaussian policy over raw intra-URLLC priority actions."""
 
     def __init__(
         self,
@@ -104,44 +99,44 @@ class WorkerCritic(nn.Module):
         return self.net(obs).squeeze(-1)
 
 
-def decode_worker_action(a_raw: np.ndarray) -> dict[str, float | np.ndarray]:
-    """Squash 6- or 7-dim raw Gaussian sample → physical Worker action.
+def decode_worker_action(a_raw: np.ndarray) -> dict[str, np.ndarray]:
+    """Decode raw Worker action into intra-URLLC per-vehicle priority weights.
 
-    Δr_min, Δr_max  →  0.1 · tanh(raw)
-    r_ded_ratio     →  sigmoid(raw)
-    w_intra^C1..C3  →  softmax over (raw_3, raw_4, raw_5)
-    β (7-dim only)  →  BETA_MIN + (BETA_MAX-BETA_MIN) · sigmoid(raw_6)
+    Pure-RL layout (2026-06-21, matches env._apply_action / _prb_split_intra_slice):
+        len=1:        K=1 no-op action; single ambulance gets full B_U (weight [1.0]).
+        len=K, K>=2:  K raw per-vehicle logits ℓ_k → softmax → weights w_k.
+    No β slot — pure-RL allocation has no urgency-temperature term.
 
-    For 6-dim input (K=1), "beta" is omitted from the result.
+    NOTE: this mirrors the env's decode (the single source of truth used in
+    training is env._apply_action, called via env.step()). Kept as the
+    documented decode contract; training does NOT route through this helper.
     """
     a = np.asarray(a_raw, dtype=np.float32)
-    if a.shape not in ((WORKER_ACTION_DIM_DEFAULT,), (WORKER_ACTION_DIM_K2PLUS,)):
+    if a.ndim != 1 or a.shape[0] == 0:
         raise ValueError(
-            f"a_raw shape {a.shape} != ({WORKER_ACTION_DIM_DEFAULT},) or ({WORKER_ACTION_DIM_K2PLUS},)"
+            "Worker action must have shape (1,) for K=1 or (K,) for K>=2"
         )
-    d_r_min = float(DELTA_R_SCALE * np.tanh(a[IDX_DELTA_R_MIN]))
-    d_r_max = float(DELTA_R_SCALE * np.tanh(a[IDX_DELTA_R_MAX]))
-    r_ded_ratio = float(1.0 / (1.0 + np.exp(-a[IDX_R_DED_RATIO])))
-    logits = a[IDX_W_INTRA_START : IDX_W_INTRA_START + 3]
-    logits = logits - logits.max()  # numerical stability
-    exp = np.exp(logits)
-    w_intra = (exp / exp.sum()).astype(np.float32)
-    out: dict[str, float | np.ndarray] = {
-        "delta_r_min": d_r_min,
-        "delta_r_max": d_r_max,
-        "r_ded_ratio": r_ded_ratio,
-        "w_intra": w_intra,           # shape (3,), simplex
+    logits = a[IDX_PRB_LOGITS_START:].astype(np.float32)
+    if a.shape[0] == 1:
+        # K=1 no-op: logit has no numeric effect; single ambulance → full budget.
+        prb_weights = np.ones(1, dtype=np.float32)
+    else:
+        stable = logits - logits.max()
+        exp = np.exp(stable)
+        prb_weights = (exp / exp.sum()).astype(np.float32)
+    return {
+        "prb_logits": logits,
+        "prb_weights": prb_weights,
     }
-    if a.shape[0] == WORKER_ACTION_DIM_K2PLUS:
-        out["beta"] = float(BETA_MIN + (BETA_MAX - BETA_MIN) / (1.0 + np.exp(-a[IDX_BETA])))
-    return out
 
 
 class WorkerAgent:
     """xApp Worker — Gaussian PPO actor-critic with γ_L=0.99 (clipped PPO + GAE).
 
-    Safety is enforced downstream by the closed-form feasibility projection
-    Π_feasible (no learnable params); the Worker policy is standard PPO.
+    Intra-URLLC PRB split is a pure-RL softmax over the Worker's per-vehicle
+    logits (env._prb_split_intra_slice — no rules, no N_req, no λ, no β). The
+    only env-side guard is an anti-starvation floor (PRB_MIN_QOS) and the
+    largest-remainder integer projection so Σ PRB = B_U exactly.
     """
 
     def __init__(
@@ -217,10 +212,17 @@ class WorkerAgent:
         dones: np.ndarray,
         last_value: float,
     ) -> dict[str, float]:
-        """One PPO epoch sweep with γ_L = γ_WORKER (clipped surrogate + entropy)."""
+        """One PPO epoch sweep with γ_L = γ_WORKER (clipped surrogate + entropy).
+
+        P1 fix: when action_dim == 1 (K=1), the Worker action is a no-op
+        (single ambulance gets all URLLC PRBs regardless). Skip actor gradient
+        updates; only train the critic (value function still needed for GAE).
+        P2 fix: accumulate metrics across all minibatches/epochs, return mean.
+        """
         n = len(rewards)
         if n == 0:
             return {}
+        skip_actor = self.action_dim == 1
         advantages, returns = compute_gae(
             rewards, values, dones, last_value, self.gamma, self.gae_lambda
         )
@@ -233,7 +235,9 @@ class WorkerAgent:
         adv_t = torch.as_tensor(advantages, dtype=torch.float32, device=self.device)
         ret_t = torch.as_tensor(returns, dtype=torch.float32, device=self.device)
 
-        last_actor_loss = last_critic_loss = last_entropy = last_clip_frac = 0.0
+        sum_actor_loss = sum_critic_loss = sum_entropy = sum_clip_frac = 0.0
+        sum_approx_kl = 0.0
+        n_mb = 0
         idx_all = np.arange(n)
         for _ in range(self.k_epochs):
             np.random.shuffle(idx_all)
@@ -242,48 +246,55 @@ class WorkerAgent:
                 if len(idx) == 0:
                     continue
                 b_obs = obs_t[idx]
-                b_act = act_t[idx]
-                b_oldlp = oldlp_t[idx]
-                b_adv = adv_t[idx]
                 b_ret = ret_t[idx]
 
-                dist = self.actor(b_obs)
-                new_log_probs = dist.log_prob(b_act).sum(-1)
-                ent = entropy_bonus(dist)
-                policy_loss, clip_frac = ppo_clip_loss(
-                    new_log_probs, b_oldlp, b_adv, self.clip_eps
-                )
-                actor_loss = policy_loss - self.ent_coef * ent
+                if not skip_actor:
+                    b_act = act_t[idx]
+                    b_oldlp = oldlp_t[idx]
+                    b_adv = adv_t[idx]
 
-                if not torch.isfinite(actor_loss):
-                    continue
+                    dist = self.actor(b_obs)
+                    new_log_probs = dist.log_prob(b_act).sum(-1)
+                    ent = entropy_bonus(dist)
+                    policy_loss, clip_frac = ppo_clip_loss(
+                        new_log_probs, b_oldlp, b_adv, self.clip_eps
+                    )
+                    actor_loss = policy_loss - self.ent_coef * ent
 
-                self.opt_actor.zero_grad()
-                actor_loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
-                self.opt_actor.step()
+                    kl = approx_kl(b_oldlp, new_log_probs)
+
+                    if torch.isfinite(actor_loss):
+                        self.opt_actor.zero_grad()
+                        actor_loss.backward()
+                        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
+                        self.opt_actor.step()
+                        sum_actor_loss += float(actor_loss.item())
+                        sum_entropy += float(ent.item())
+                        sum_clip_frac += float(clip_frac.item())
+                        sum_approx_kl += float(kl.item())
 
                 v = self.critic(b_obs)
                 critic_loss = value_loss(v, b_ret, self.vf_coef)
-                if not torch.isfinite(critic_loss):
-                    continue
+                if torch.isfinite(critic_loss):
+                    self.opt_critic.zero_grad()
+                    critic_loss.backward()
+                    torch.nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
+                    self.opt_critic.step()
+                    sum_critic_loss += float(critic_loss.item())
 
-                self.opt_critic.zero_grad()
-                critic_loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
-                self.opt_critic.step()
+                n_mb += 1
 
-                last_actor_loss = float(actor_loss.item())
-                last_critic_loss = float(critic_loss.item())
-                last_entropy = float(ent.item())
-                last_clip_frac = float(clip_frac.item())
-
+        ev = explained_variance(values, returns)
+        d = max(n_mb, 1)
         return {
-            "worker_actor_loss": last_actor_loss,
-            "worker_critic_loss": last_critic_loss,
-            "worker_entropy": last_entropy,
-            "worker_clip_fraction": last_clip_frac,
+            "worker_actor_loss": sum_actor_loss / d if not skip_actor else 0.0,
+            "worker_critic_loss": sum_critic_loss / d,
+            "worker_entropy": sum_entropy / d if not skip_actor else 0.0,
+            "worker_clip_fraction": sum_clip_frac / d if not skip_actor else 0.0,
+            "worker_approx_kl": sum_approx_kl / d if not skip_actor else 0.0,
+            "worker_explained_variance": ev,
             "worker_n_samples": n,
+            "worker_actor_skipped_k1": int(skip_actor),
         }
 
     def save(self, path: str) -> None:

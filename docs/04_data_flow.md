@@ -2,7 +2,7 @@
 
 ## Transaction flow (xe → bệnh viện)
 1. **UE (xe)** sinh gói telemetry (F=1 luồng tổng hợp `ambulance_status`, 2026-06-14 consolidation — gộp HR_agg/SpO2_agg/ECG_waveform/DENM cũ) — point process, payload+rate (M8.1b). **KHÔNG sinh giá trị sinh hiệu** (chỉ timestamp + size).
-2. **Air interface (Uu, UPLINK)**: P_tx^UE=23dBm; SINR từ UMi channel (M2); capacity `C=η·PRB·B_PRB·log₂(1+SINR)`.
+2. **Air interface (Uu, UPLINK)**: P_tx^UE=23dBm; SINR từ UMa channel (M2, single-cell 1km + interference margin); capacity `C=η·PRB·B_PRB·log₂(1+SINR)`.
 3. **Fronthaul (O-RU→O-DU)**: D_FH=0.1ms.
 4. **Backhaul → Core/Bệnh viện**: D_BH=0.1ms.
 - ⚠️ **KHÔNG MEC processing step** (MEC đã gỡ — D23). Đầu nhận = ED / dispatch centre / bác sĩ từ xa (lý do AoI phục vụ "đầu nhận ở xa" — master plan PHẦN 12).
@@ -21,7 +21,7 @@
   - Gói gen_time u giao tại t: `Δ_k(t) = t − u` (reset).
   - `drop_rate = dropped/(dropped+delivered)`.
 - **Scope**: AoI optimization cho 1 luồng tổng hợp `ambulance_status` (F=1, 2026-06-14 consolidation; LCFS+drop_old, AoI-aware) có ngưỡng `AoI_max^sev`. Code: `env/aoi_tracker.py`.
-- **obs per-amb (∀K)**: `AoI_norm_k = AoI_k/AoI_max^{sev_k}` = **1 dim/xe** (#21, offset `AMB_AOI_NORM_OFFSET` trong khối 10-dim per-amb — [08](08_implementation_notes.md)) — worst-NORMALIZED là sufficient statistic; F=1 ⟹ 1 luồng duy nhất nên "worst" = giá trị đó, công thức tổng quát cho F>1 là `max_s(AoI_s/AoI_max_s^{sev_k})`.
+- **obs per-amb (∀K)**: `AoI_norm_k = AoI_k/AoI_max^{sev_k}` = **1 dim/xe** (#21, offset `AMB_AOI_NORM_OFFSET` trong khối 11-dim per-amb — [08](08_implementation_notes.md)) — worst-NORMALIZED là sufficient statistic; F=1 ⟹ 1 luồng duy nhất nên "worst" = giá trị đó, công thức tổng quát cho F>1 là `max_s(AoI_s/AoI_max_s^{sev_k})`.
 
 ## ⚠️ Đã GỠ
 - **MEC offloading model** (decision var x_k, D_MEC, f_MEC, C_FH) — vestigial, gỡ hoàn toàn (D23).

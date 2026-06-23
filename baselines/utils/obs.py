@@ -9,7 +9,7 @@ responsible for injecting the *current* λ_local into the observation before
 the policy sees it — this is what makes the augmented-reward MDP Markovian.
 
 CRITICAL: this overlay MUST be applied identically by every solver driver
-(train.py for PPO, solvers/smoke_train.py for TD3/SAC). A solver that skips
+(train.py for PPO, solvers/train_offpolicy.py for TD3/SAC). A solver that skips
 it observes λ=0 forever, optimizes a non-stationary target, and is no longer
 solving the same problem as the others. Keeping one definition here prevents
 the per-file drift that previously left TD3/SAC blind to λ.

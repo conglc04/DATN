@@ -8,8 +8,8 @@
 | M1.1/1.2 | P_TOTAL=273, B_PRB=360kHz | ✅ | TS 38.101-1 Table 5.3.2-1; TS 38.211 §4.4.4 |
 | M1.3 | P_tx^UE=23dBm (uplink) | ✅ | TS 38.101-1 §6.2.1 |
 | M1.5/1.6 | η=0.75, NF=7dB | 🟡 | `Hyoungju Ji 2017` §II-B; `Zexian Li 2018` §III / TR 38.101-4 |
-| M2.1-2.3 | UMi path-loss/LOS/shadow | ✅ | TR 38.901 §7.4.1/§7.4.2 |
-| M2.0 | R_cell=300m single-cell Bạch Mai | 🔴 | UMi-norm declared (D25); KHÔNG đo gNB thật |
+| M2.1-2.3 | UMa path-loss/shadow (sweep) `pl_uma`; UMi LOS/NLOS (legacy micro) | ✅ | TR 38.901 §7.4.1/§7.4.2 |
+| M2.0 | R_cell=1km single-cell UMa macro Bạch Mai + interference margin −86 dBm/PRB (W15-B2) | 🔴 | UMa-norm declared (D25); KHÔNG đo gNB thật; SINR≈2.7dB@edge |
 | M3.1 | Shannon C=η·PRB·B·log₂(1+SINR) | ✅ | Shannon; η `Hyoungju Ji 2017`; MCS TS 38.214 |
 | M4.1/4.3/4.4 | D_DET/D_FH/D_BH | 🟡 | TS 38.214 §5.1; `O-RAN.pdf` WG4; `Nie Cheng 2022` §III |
 | M4.2 | M/G/1 Pollaczek–Khinchine | ✅ | `9780470316887.pdf` (Kleinrock) §5.6 |

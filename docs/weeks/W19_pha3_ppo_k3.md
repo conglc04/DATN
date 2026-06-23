@@ -3,7 +3,7 @@
 > **Pha**: 3 · **Status**: 📅 PLANNED · **Gate**: **GATE 3B** · **Solver**: PPO · **K**: 3 (3 xe cứu thương) · **Build**: B5 (đã code ở W18) · **Deps**: GATE 3A
 
 ## Env config (giống W18, KHÔNG đổi)
-gNB/cell-center = `(0,0)`, R_cell=300m, UMi 3GPP TR 38.901, single-cell, no handover. Chỉ đổi `K_ambulances: 1 → 3` → obs 31→51 (đã code+assert ở W18/B5).
+gNB/cell-center = `(0,0)`, R_cell=1km, UMa 3GPP TR 38.901 + interference margin −86 dBm/PRB, single-cell, no handover. Chỉ đổi `K_ambulances: 1 → 3` → obs 31→51 (đã code+assert ở W18/B5).
 
 ## C — PPO solver run, K=3
 - **C1** Train PPO (Manager+Worker) trên env K=3, ≥10 seeds, MCI single-cell @ Bạch Mai (3 xe đồng trú 1 cell, hội tụ, severity khác nhau → triage contention).

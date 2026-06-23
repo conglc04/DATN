@@ -42,7 +42,7 @@ def test_default_construction():
     assert lam.K == 1
     assert lam.n_constraints == 5 == N_HARD_CONSTRAINTS
     assert lam.alpha_lambda == ALPHA_LAMBDA_DUAL
-    assert lam.alpha_lambda == 1e-4
+    assert lam.alpha_lambda == 2e-4  # A/B 5e-4 reverted to 2e-4 on 2026-06-22 (α_λ wrong lever)
     assert lam.worker_steps_per_manager == WORKER_STEPS_PER_MANAGER
     assert lam.lambda_global.shape == (5,)
     assert lam.lambda_local.shape == (5,)
@@ -338,6 +338,64 @@ def test_augmented_reward_positive_deviation_reduces_reward():
     r_aug = lam.augmented_reward(reward=0.0, c_vec=c, d_phi=d)
     expected_penalty = float(np.dot(lam.lambda_local, 1.0 / lam.dual_scales))
     assert abs(r_aug - (-expected_penalty)) < 1e-6
+
+
+def test_augmented_reward_slack_constraint_creates_no_bonus():
+    """Bonus-masking regression (2026-06-22 audit): a deeply slack C1 (mean
+    delay far under threshold) must contribute ZERO, not a reward bonus that
+    masks a smaller C2 (tail) violation. Pre-fix (signed deviation), this
+    exact shape produced a net reward INCREASE despite a real violation."""
+    lam = LambdaState()
+    lam.reset_episode((5,), 5)
+    # C1 deeply slack (c << d) — would be a huge negative term pre-fix.
+    # C2 mildly violated (c > d) — the real safety-relevant signal.
+    c = np.array([0.001, 1e-5 + 1e-5, 30.0, 0.1, 1e-3])
+    d = np.array([1.0, 1e-5, 30.0, 0.1, 1e-3])
+    r_aug = lam.augmented_reward(reward=0.0, c_vec=c, d_phi=d)
+    c2_only_penalty = lam.lambda_local[lam.K] * (1e-5 / lam.dual_scales[lam.K])
+    assert abs(r_aug - (-c2_only_penalty)) < 1e-9, (
+        "Slack C1 must contribute exactly 0 (hinge), not a bonus that "
+        "offsets/masks the C2 violation penalty"
+    )
+    assert r_aug < 0.0, "A violated tail constraint must never net out to a reward bonus"
+
+
+def test_penalty_breakdown_sums_to_scalar_penalty():
+    """Σ_j penalty_breakdown[j] must equal the scalar penalty (r_base − r_aug)."""
+    lam = LambdaState()
+    lam.reset_episode((5,), 5)
+    c = np.array([2.0, 1.0 + 1e-5, 31.0, 1.1, 1.0 + 1e-3])
+    d = np.array([1.0, 1e-5, 30.0, 0.1, 1e-3])
+    breakdown = lam.penalty_breakdown(c_vec=c, d_phi=d)
+    assert breakdown.shape == (lam.n_constraints,)
+    scalar_penalty = 0.0 - lam.augmented_reward(reward=0.0, c_vec=c, d_phi=d)
+    assert abs(float(breakdown.sum()) - scalar_penalty) < 1e-9
+
+
+def test_penalty_breakdown_sign_separates_slack_from_violated():
+    """Slack constraint (c<d) -> exactly zero (no bonus, hinge); violated (c>d) -> positive."""
+    lam = LambdaState()
+    lam.reset_episode((5,), 5)  # all warm λ > 0
+    # C1 slack (c<d), C2 violated (c>d); rest exactly met.
+    c = np.array([0.5, 1.0 + 1e-5, 30.0, 0.1, 1e-3])
+    d = np.array([1.0, 1e-5, 30.0, 0.1, 1e-3])
+    b = lam.penalty_breakdown(c_vec=c, d_phi=d)
+    assert b[0] == 0.0         # C1 slack -> hinge clips to zero (no bonus)
+    assert b[lam.K] > 0.0      # C2 violated -> penalty
+    assert b[2 * lam.K] == 0.0  # C4 exactly met -> zero
+
+
+def test_penalty_breakdown_does_not_mutate_state():
+    """penalty_breakdown is pure: λ_local/λ_global/win_c unchanged."""
+    lam = LambdaState()
+    lam.reset_episode((4,), 4)
+    before_g = lam.lambda_global.copy()
+    before_l = lam.lambda_local.copy()
+    before_win = lam.win_c.copy()
+    lam.penalty_breakdown(c_vec=np.ones(5) * 2, d_phi=np.ones(5))
+    np.testing.assert_array_equal(lam.lambda_global, before_g)
+    np.testing.assert_array_equal(lam.lambda_local, before_l)
+    np.testing.assert_array_equal(lam.win_c, before_win)
 
 
 # ----------------------------------------------------------------------------

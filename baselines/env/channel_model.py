@@ -201,6 +201,25 @@ def sinr_db(rx_power_dbm: float, interference_dbm: float, noise_dbm: float) -> f
     return 10.0 * math.log10(snr_lin)
 
 
+def noise_plus_interference_dbm(noise_dbm: float, interference_dbm: float | None) -> float:
+    """Combine thermal noise with an aggregate inter-cell interference margin.
+
+    Returns 10·log10(N_lin + I_lin) in dBm. When ``interference_dbm`` is None the
+    link is purely noise-limited and the thermal noise is returned unchanged
+    (preserves the legacy single-cell SNR-only model and W12 calibration).
+
+    The interference term models the aggregate downlink interference of an
+    interference-limited MACRO deployment as a constant noise-rise floor
+    (frequency-reuse-1 neighbour cells), WITHOUT explicitly simulating other
+    gNBs — keeping the env single-cell. Macro scenarios set a value (e.g. a
+    per-PRB I ≈ −72 dBm) so SINR varies meaningfully across the 1 km cell
+    instead of saturating at the clamp.
+    """
+    if interference_dbm is None:
+        return noise_dbm
+    return 10.0 * math.log10(db_to_linear(noise_dbm) + db_to_linear(interference_dbm))
+
+
 def capacity_per_prb_bps(sinr_db_val: float, eta: float = SHANNON_ETA) -> float:
     """Shannon capacity per PRB in bps.
 

@@ -1,0 +1,65 @@
+{
+  "baseline_id": "audit-baseline-e565846-20260620",
+  "commit": "e565846395a2317a674777de086c26f5bce762c1",
+  "branch": "feat/hrl-real-3solvers",
+  "date": "2026-06-20",
+  "scope": "end-to-end formulation + implementation closure audit before Phase-3 training",
+  "source_of_truth": {
+    "constants_thresholds": "utils/config.py",
+    "dynamics": "env/oran_env.py",
+    "channel": "env/channel_model.py",
+    "queue": "env/queue_model.py",
+    "aoi": "env/aoi_tracker.py",
+    "dual_lagrangian": "agents/lagrangian.py",
+    "manager_3variants": "agents/manager_agent.py",
+    "manager_state": "solvers/_common.py",
+    "lambda_obs_overlay": "utils/obs.py",
+    "ppo_driver": "train.py",
+    "offpolicy_driver": "solvers/train_offpolicy.py"
+  },
+  "legacy_dead_code": [
+    "utils/config.py:INTRA_SLICE_KAPPA (unused, kept for import compat)",
+    "utils/config.py:RHO_URGENCY_TIEBREAK (unused, kept for import compat)",
+    "env/oran_env.py:RWP bounce fallback (unit-test / non-SUMO only; train path uses SUMO)"
+  ],
+  "independent_oracles": {
+    "channel_queue_timescale_nreq_sign_determinism": "audit/closure_checks.py (30 checks)",
+    "feasibility": "audit/feasibility_oracle.py (no env/RL import)",
+    "runtime_recompute": "audit/runtime_oracle.py (real env vs independent, tol 1e-6)",
+    "dry_run": "audit/dry_run.py (24 live no-learning checks K=1/K=3)",
+    "tail_eval_bank": "audit/eval_tail_bank.py (pooled C2/C5 tail estimation, Q1 resolution)"
+  },
+  "deliverable_tests": [
+    "tests/test_formulation_audit.py",
+    "tests/test_formulation_closure.py",
+    "tests/test_timescale_episode_semantics.py",
+    "tests/test_solver_equivalence.py",
+    "tests/test_mutation_guards.py"
+  ],
+  "run_commands": {
+    "ppo_k1": "python train.py --algo ppo --macro --K 1 --episodes N --seed S",
+    "ppo_k3": "python train.py --algo ppo --macro --K 3 --episodes N --seed S",
+    "td3_k1": "python -m solvers.train_td3 --macro --K 1 --episodes N --seed S",
+    "td3_k3": "python -m solvers.train_td3 --macro --K 3 --episodes N --seed S",
+    "sac_k1": "python -m solvers.train_sac --macro --K 1 --episodes N --seed S",
+    "sac_k3": "python -m solvers.train_sac --macro --K 3 --episodes N --seed S",
+    "sweep_launcher": "EPISODES=N SEED=S bash scripts/run_sweep.sh <w18..w23>",
+    "gate_audit": "python -m scripts.audit_gate3 --algo <ppo|td3|sac> --seeds S..."
+  },
+  "config_fingerprint": {
+    "P_TOTAL": 273, "B_PRB_kHz": 360, "F_CARRIER_GHz": 3.5, "R_CELL_M": 1000,
+    "SHANNON_ETA": 0.75, "MAC_TTI_ms": 0.5, "WORKER_ms": 10, "MANAGER_ms": 100,
+    "WORKER_STEPS_PER_MANAGER": 10, "MAC_TICKS_PER_WORKER": 20,
+    "GAMMA_WORKER": 0.99, "GAMMA_MANAGER": 0.90438,
+    "B_RRM_MIN": 0.05, "B_RRM_MAX": 0.85, "LAMBDA_MAX": 10.0, "ALPHA_LAMBDA": 1e-4,
+    "C3_eMBB_floor_Mbps_fixed": 10.0, "constraint_dim": "4K+1",
+    "C1_D_max_ms": [20, 10, 5, 2, 1], "C2_eps": [1e-3, 1e-4, 1e-4, 1e-5, 1e-5],
+    "C4_AoI_max_s": [1.0, 0.5, 0.2, 0.1, 0.1], "C5_eps_aoi": [1e-2, 1e-3, 1e-3, 1e-3, 1e-3],
+    "alpha_eMBB": [0.70, 0.55, 0.40, 0.20, 0.05]
+  },
+  "test_counts": {
+    "full_suite_pre_new_tests": 1112,
+    "closure_checks": 30,
+    "note": "integration count filled after full run incl new deliverable tests"
+  }
+}

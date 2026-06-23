@@ -1,6 +1,6 @@
 # W14 — Pha 1: Age of Information + Traffic (MEC đã GỠ)
 
-> **Pha**: 1 · **Status**: 📅 PLANNED · **Gate**: micro-GATE 1C · **Nhóm**: M7–M8 (M9 MEC GỠ) · **Deps**: W13/1B
+> **Pha**: 1 · **Status**: ✅ DONE · **Gate**: micro-GATE 1C ✅ · **Nhóm**: M7–M8 (M9 MEC GỠ) · **Deps**: W13/1B ✅
 
 ## M7 — Age of Information
 - **M7.1** `Δ(t) = t − U(t)` (U = timestamp gói mới nhất) — ✅[`Kangwei Qi…[2024].pdf` §III; `Xianfu Chen…pdf` §II; `Zoubeir Mlika…[2022].pdf` §II] — [s] *(thay Kaul 2012 — vắng corpus)*

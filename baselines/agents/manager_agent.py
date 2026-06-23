@@ -1,16 +1,18 @@
-"""Manager agent (rApp π_H) for PPO.
+"""Manager agent (high-level policy π_H, 100 ms cadence) for PPO.
 
 Phase 3.3.1 / 3.3.2: high-level policy operating on coarse multi-cell aggregate
-state every Manager step (T_H = 100 ms sim = 10 Worker steps).
+state every Manager step (T_H = 100 ms = 10 Worker steps).
 
 Output action dimensions (Phase 2.3.2; MEC offload removed — B0b):
     a_H = (b_rrm,)             # 1-dim continuous
-        b_rrm ∈ [0, 1]          RRM budget hint to Worker (post-decoded via sigmoid)
+        b_rrm ∈ [B_RRM_MIN, B_RRM_MAX]   inter-slice URLLC budget (decode_manager_action:
+                                          sigmoid → affine into the safe PRB range)
 
 Reference:
     - docs/13_methodology_walkthrough.md Phase 3.3.1 (Manager arch)
     - docs/13_methodology_walkthrough.md Phase 3.2.4 (γ_MANAGER = γ_WORKER^W ≈ 0.904)
-    - Three-rate hierarchy locked: α_πH=1e-5 < α_λ=1e-4 < α_πL=1e-3
+    - Three-rate hierarchy: α_πH=3e-5 < α_λ=2e-4 < α_πL=3e-4 (config.py SSOT; α_λ A/B
+      5e-4 reverted to 2e-4 on 2026-06-22, see config.ALPHA_LAMBDA_DUAL history)
 """
 
 from __future__ import annotations
@@ -22,7 +24,10 @@ import torch
 import torch.nn as nn
 from torch.distributions import Normal
 
-from agents.ppo_core import compute_gae, entropy_bonus, ppo_clip_loss, value_loss
+from agents.ppo_core import (
+    approx_kl, compute_gae, entropy_bonus, explained_variance,
+    ppo_clip_loss, value_loss,
+)
 import copy
 
 from utils.config import (
@@ -119,7 +124,7 @@ def decode_manager_action(action_raw: np.ndarray) -> dict[str, float]:
 
 
 class ManagerAgent:
-    """rApp Manager — Gaussian PPO actor-critic with γ_H ≈ 0.904 (N1).
+    """Manager (high-level, 100 ms) — Gaussian PPO actor-critic with γ_H ≈ 0.904 (N1).
 
     State_dim default = 11 (W07 placeholder; finalize in W08 with explicit
     multi-cell aggregator).
@@ -198,14 +203,19 @@ class ManagerAgent:
         dones: np.ndarray,
         last_value: float,
     ) -> dict[str, float]:
-        """One PPO epoch sweep over a rollout buffer with γ_H = γ_MANAGER."""
+        """One PPO epoch sweep over a rollout buffer with γ_H = γ_MANAGER.
+
+        P2 fix: accumulate metrics across all minibatches/epochs, return mean.
+        P3 fix: cap effective epochs to min(k_epochs, max(1, n // 4)) to prevent
+        overfitting when Manager gets very few transitions per rollout.
+        """
         n = len(rewards)
         if n == 0:
             return {}
+        k_epochs_eff = min(self.k_epochs, max(1, n // 4))
         advantages, returns = compute_gae(
             rewards, values, dones, last_value, self.gamma, self.gae_lambda
         )
-        # Normalize advantages
         if advantages.size > 1:
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
@@ -215,9 +225,11 @@ class ManagerAgent:
         adv_t = torch.as_tensor(advantages, dtype=torch.float32, device=self.device)
         ret_t = torch.as_tensor(returns, dtype=torch.float32, device=self.device)
 
-        last_actor_loss = last_critic_loss = last_entropy = last_clip_frac = 0.0
+        sum_actor_loss = sum_critic_loss = sum_entropy = sum_clip_frac = 0.0
+        sum_approx_kl = 0.0
+        n_mb = 0
         idx_all = np.arange(n)
-        for _ in range(self.k_epochs):
+        for _ in range(k_epochs_eff):
             np.random.shuffle(idx_all)
             for start in range(0, n, self.minibatch_size):
                 idx = idx_all[start : start + self.minibatch_size]
@@ -237,35 +249,39 @@ class ManagerAgent:
                     new_log_probs, b_oldlp, b_adv, self.clip_eps
                 )
                 actor_loss = policy_loss - self.ent_coef * ent
-                if not torch.isfinite(actor_loss):
-                    continue
-
-                self.opt_actor.zero_grad()
-                actor_loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
-                self.opt_actor.step()
+                kl = approx_kl(b_oldlp, new_log_probs)
+                if torch.isfinite(actor_loss):
+                    self.opt_actor.zero_grad()
+                    actor_loss.backward()
+                    torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
+                    self.opt_actor.step()
+                    sum_actor_loss += float(actor_loss.item())
+                    sum_entropy += float(ent.item())
+                    sum_clip_frac += float(clip_frac.item())
+                    sum_approx_kl += float(kl.item())
 
                 v = self.critic(b_obs)
                 critic_loss = value_loss(v, b_ret, self.vf_coef)
-                if not torch.isfinite(critic_loss):
-                    continue
+                if torch.isfinite(critic_loss):
+                    self.opt_critic.zero_grad()
+                    critic_loss.backward()
+                    torch.nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
+                    self.opt_critic.step()
+                    sum_critic_loss += float(critic_loss.item())
 
-                self.opt_critic.zero_grad()
-                critic_loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
-                self.opt_critic.step()
+                n_mb += 1
 
-                last_actor_loss = float(actor_loss.item())
-                last_critic_loss = float(critic_loss.item())
-                last_entropy = float(ent.item())
-                last_clip_frac = float(clip_frac.item())
-
+        ev = explained_variance(values, returns)
+        d = max(n_mb, 1)
         return {
-            "manager_actor_loss": last_actor_loss,
-            "manager_critic_loss": last_critic_loss,
-            "manager_entropy": last_entropy,
-            "manager_clip_fraction": last_clip_frac,
+            "manager_actor_loss": sum_actor_loss / d,
+            "manager_critic_loss": sum_critic_loss / d,
+            "manager_entropy": sum_entropy / d,
+            "manager_clip_fraction": sum_clip_frac / d,
+            "manager_approx_kl": sum_approx_kl / d,
+            "manager_explained_variance": ev,
             "manager_n_samples": n,
+            "manager_k_epochs_eff": k_epochs_eff,
         }
 
     def save(self, path: str) -> None:
@@ -290,12 +306,12 @@ class ManagerAgent:
 
 
 # ============================================================
-# TD3 Manager (algorithm-matched Manager for TD3Baseline)
+# TD3 Manager (algorithm-matched Manager for TD3Solver)
 # ============================================================
 
 
 class TD3ManagerAgent:
-    """TD3 Manager for the rApp slow-timescale (b_rrm ∈ [B_RRM_MIN, B_RRM_MAX]).
+    """TD3 Manager for the slow timescale (100 ms; b_rrm ∈ [B_RRM_MIN, B_RRM_MAX]).
 
     Uses the SAME TD3 algorithm as the Worker for absolute algorithm parity.
     Off-policy replay buffer; updates every Manager boundary once buffer ≥ warmup.
@@ -426,12 +442,12 @@ class TD3ManagerAgent:
 
 
 # ============================================================
-# SAC Manager (algorithm-matched Manager for SACBaseline)
+# SAC Manager (algorithm-matched Manager for SACSolver)
 # ============================================================
 
 
 class SACManagerAgent:
-    """SAC Manager for the rApp slow-timescale.
+    """SAC Manager for the slow timescale (100 ms).
 
     Uses the SAME SAC algorithm as the Worker for absolute algorithm parity.
     Stochastic actor with automatic entropy temperature α_sac.

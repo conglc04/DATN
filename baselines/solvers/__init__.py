@@ -1,13 +1,14 @@
-"""Sibling solvers + Exp6 ablation variants.
+"""Sibling solvers — same CMDP, same HRL Manager+Worker, different RL core.
+
+All 3 solvers (PPO in train.py, TD3 and SAC here) solve the SAME optimization
+problem with the SAME two-timescale HRL architecture. The only difference is
+the RL algorithm core (on-policy PPO vs off-policy TD3/SAC).
 
 Sibling solvers (Table I, alongside PPO):
-    td3              — off-policy TD3 + Lagrangian (deterministic actor)
-    sac              — off-policy SAC + Lagrangian (max-entropy stochastic actor)
+    td3              — HRL off-policy TD3 + (4K+1)-dim Lagrangian
+    sac              — HRL off-policy SAC + (4K+1)-dim Lagrangian
 
-Lower-bound + Exp6 ablation variants (NOT in Table I):
-    static_slicing       — Fixed 50/50 PRB (lower bound)
-    b2_hrl_ppo_soft      — HRL-PPO no CMDP, no phase
+Ablation variants (Table II, Exp6 — isolate contribution of each component):
     pa_ppo_soft          — Phase-aware, no CMDP → "w/o CMDP"
-    no_phase_ppo    — PPO minus phase signaling → "w/o Phase"
     ppo_cmdp_flat        — CMDP, no HRL → "w/o HRL"
 """

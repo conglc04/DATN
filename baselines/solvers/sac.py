@@ -1,18 +1,17 @@
-"""SAC sibling solver — off-policy SAC + 5-dim λ via LambdaState (W07).
+"""SAC sibling solver — off-policy SAC + HRL Manager+Worker + (4K+1)-dim λ (W07).
 
 Phase 3 sibling solver — applied AFTER Phase 2 problem statement complete
-(end of W06). SAC is **flat off-policy SAC + Lagrangian** with the same
-5-dim λ machinery as PPO and TD3.
+(end of W06). SAC uses the SAME HRL two-timescale architecture as PPO and TD3:
+    - SACManagerAgent (100ms, inter-slice b_rrm) — stochastic SAC core
+    - SACWorker (10ms, intra-URLLC per-vehicle logits, pure-RL, no β) — max-entropy SAC core
+    - (4K+1)-dim LambdaState dual ascent (1 per Manager step boundary)
 
 Differences from TD3:
     - Stochastic max-entropy actor (automatic temperature α) instead of
       deterministic actor + exploration noise
-    - Otherwise identical sibling-solver wiring: λ update frequency tied to
-      Worker step count via LambdaState (1 dual ascent per Manager step
-      boundary, same as on-policy)
 
-Used in Table I alongside TD3 to show PPO generalizes across
-on-policy and off-policy (deterministic + stochastic) constrained-RL families.
+Used in Table I alongside TD3: same CMDP problem, same HRL, only the RL core
+differs — fair comparison across on-policy/off-policy families.
 
 Reference:
     - Haarnoja et al. 2018 "Soft Actor-Critic" (ICML) +
@@ -32,7 +31,7 @@ from agents.sac_agent import SACAgent
 from solvers._common import BaselineFlags, mask_severity
 
 
-class SACBaseline:
+class SACSolver:
     name = "sac"
     # Equal sibling solver: severity-aware (same observation as PPO). Severity
     # one-hot MUST stay visible — QoS targets d_phi are severity-dependent, so a
@@ -52,9 +51,10 @@ class SACBaseline:
     ) -> None:
         self.flags = self.FLAGS
         if action_low is None:
-            action_low = (-1.0, -1.0, 0.0, 0.0, 0.0, 0.0) + ((0.0,) if action_dim >= 7 else ())
+            # Clean Worker layout: K=1 no-op or K>=2 pure per-vehicle logits (no β).
+            action_low = (-3.0,) * action_dim
         if action_high is None:
-            action_high = (1.0, 1.0, 1.0, 1.0, 1.0, 1.0) + ((1.0,) if action_dim >= 7 else ())
+            action_high = (3.0,) * action_dim
         self.sac = SACAgent(
             state_dim=state_dim,
             action_dim=action_dim,

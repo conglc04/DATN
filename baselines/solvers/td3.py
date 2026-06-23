@@ -1,16 +1,17 @@
-"""TD3 sibling solver — off-policy TD3 + 5-dim λ via LambdaState (W07).
+"""TD3 sibling solver — off-policy TD3 + HRL Manager+Worker + (4K+1)-dim λ (W07).
 
 Phase 3 sibling solver — applied AFTER Phase 2 problem statement complete
-(end of W06). TD3 is **flat off-policy TD3 + Lagrangian** with the same
-5-dim λ machinery as PPO and SAC.
+(end of W06). TD3 uses the SAME HRL two-timescale architecture as PPO and SAC:
+    - TD3ManagerAgent (100ms, inter-slice b_rrm) — deterministic TD3 core
+    - TD3Worker (10ms, intra-URLLC per-vehicle logits, pure-RL, no β) — deterministic TD3 core
+    - (4K+1)-dim LambdaState dual ascent (1 per Manager step boundary)
 
 Differences from on-policy PPO:
-    - Off-policy backbone (TD3) with replay buffer
-    - λ update frequency tied to Worker step count via LambdaState
-      (still 1 dual ascent per Manager step boundary, same as on-policy)
+    - Off-policy backbone (TD3) with replay buffer + deterministic actor
+    - Worker/Manager update every step (replay) instead of per-rollout (GAE)
 
-Used in Table I alongside SAC to show PPO generalizes across
-on-policy + off-policy (deterministic + stochastic) constrained-RL families.
+Used in Table I alongside SAC: same CMDP problem, same HRL, only the RL core
+differs — fair comparison across on-policy/off-policy families.
 
 Reference:
     - Fujimoto et al. 2018 "TD3" (ICML)
@@ -29,7 +30,7 @@ from agents.td3_agent import TD3Agent
 from solvers._common import BaselineFlags, mask_severity
 
 
-class TD3Baseline:
+class TD3Solver:
     name = "td3"
     # Equal sibling solver: severity-aware (same observation as PPO). Severity
     # one-hot MUST stay visible — QoS targets d_phi are severity-dependent, so a
@@ -49,9 +50,10 @@ class TD3Baseline:
     ) -> None:
         self.flags = self.FLAGS
         if action_low is None:
-            action_low = (-1.0, -1.0, 0.0, 0.0, 0.0, 0.0) + ((0.0,) if action_dim >= 7 else ())
+            # Clean Worker layout: K=1 no-op or K>=2 pure per-vehicle logits (no β).
+            action_low = (-3.0,) * action_dim
         if action_high is None:
-            action_high = (1.0, 1.0, 1.0, 1.0, 1.0, 1.0) + ((1.0,) if action_dim >= 7 else ())
+            action_high = (3.0,) * action_dim
         self.td3 = TD3Agent(
             state_dim=state_dim,
             action_dim=action_dim,

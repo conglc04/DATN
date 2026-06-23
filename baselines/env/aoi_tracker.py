@@ -2,14 +2,21 @@
 
 Implements:
     - STREAM_TYPES classification (single LCFS+drop_old aggregated stream)
-    - AoI bookkeeping (Kaul et al. 2012)
+    - AoI definition Δ(t) = t − U(t) where U(t) = generation time of the
+      most recently delivered packet [Kangwei Qi et al. 2024 §III;
+      Xianfu Chen et al. §II; Zoubeir Mlika et al. 2022 §II]
     - LCFS-with-drop-old queue (latest-status semantics: stale reports are
       superseded by the newest one before delivery)
+      [Kangwei Qi et al. 2024; Xianfu Chen et al.]
     - AoI violation rate vs AoI_max^sev thresholds
 
 Reference:
     - docs/04_data_flow.md AoI formula (lines 150-160)
-    - Kaul et al. 2012 (Real-time status: How often should one update?)
+    - Kangwei Qi et al. 2024 (primary corpus source for AoI definition + LCFS)
+    - Xianfu Chen et al. (LCFS freshest-first approximation)
+    - Zoubeir Mlika et al. 2022 §II (AoI formula)
+    Note: expected_aoi_mm1() helper uses Kaul 2012 M/M/1 closed-form for
+    unit tests only — NOT the primary AoI model of this simulator.
 """
 
 from __future__ import annotations

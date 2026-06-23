@@ -9,7 +9,7 @@
 - `tests/test_env_week2.py`.
 
 ## Sửa/scope (audit post-cleanup)
-- ⚠️ Channel hiện code = UMa+UMi-SC hybrid → **sẽ thu về UMi single-cell 300m @ Bạch Mai** [3GPP TR 38.901] ở [W12](W12_pha1_radio_channel_capacity.md)/M2 (gỡ UMa + KNN Keangnam — D25, audit #11).
+- ⚠️ Channel: code có cả `pl_uma` + `pl_umi`. Sweep W18–W23 dùng **UMa single-cell 1km @ Bạch Mai** [3GPP TR 38.901] (`bs_layer="macro"`, W15-B2; D25, audit C2 2026-06-19); scenario 300m micro/UMi = legacy default cho unit-test. KNN Keangnam gỡ (sai site, audit #11).
 - ⚠️ Traffic chỉ **URLLC xe + eMBB bystander** (mMTC KHÔNG trong scope hiện tại); payload/rate ground ref ở [W14](W14_pha1_aoi_traffic.md)/M8.1b.
 
 ## Gate G1.1 ✅

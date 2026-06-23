@@ -17,7 +17,7 @@ def e2e_delay_breakdown(
     """Decompose E2E delay into components for sanity reporting.
 
     D_e2e = D_det + D_tx + D_queue + D_fh + D_bh
-    Reference: docs/04_data_flow.md, target at φ₃ ≈ 0.7-0.9ms.
+    Reference: docs/04_data_flow.md, target at severity-5 ≈ 0.7-0.9ms.
     """
     return {
         "D_det": d_det,

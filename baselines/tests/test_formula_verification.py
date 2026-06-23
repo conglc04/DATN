@@ -139,17 +139,16 @@ class TestE2EDelayComposition:
         assert d[0] == pytest.approx(expected, rel=1e-12)
         env.close()
 
-    def test_unstable_queue_clamps_to_2x_tightest_dmax(self):
-        """Unstable URLLC queue → D_e2e clamped at 2× D_max(sev 5) = 2 ms."""
-        from env.oran_env import EnvConfig, ORANEnv
-        from utils.config import SEVERITY_QOS
+    def test_unstable_queue_uses_overload_delay(self):
+        """Unstable URLLC queue (rho >= 1) → D_e2e = OVERLOAD_DELAY_SEC (E1 fix)."""
+        from env.oran_env import OVERLOAD_DELAY_SEC, EnvConfig, ORANEnv
         env = ORANEnv(EnvConfig(K_ambulances=1))
         env.reset(seed=0)
         q = env.queues["urllc_0"]
         q.set_arrival_rate(1000.0)
         q.service_rate = 1.0       # ρ ≫ 1, unstable
         d = env._compute_e2e_delay_per_amb()
-        assert d[0] == pytest.approx(2.0 * SEVERITY_QOS[5]["D_max"], rel=1e-12)
+        assert d[0] == pytest.approx(OVERLOAD_DELAY_SEC, rel=1e-12)
         env.close()
 
 
@@ -316,17 +315,17 @@ class TestSeverityMonotonicity:
         for s in range(1, 6):
             assert SEVERITY_ALPHA[s]["urllc"] + SEVERITY_ALPHA[s]["embb"] == pytest.approx(1.0)
 
-    def test_cmdp_embb_floor_non_increasing(self):
-        """eMBB throughput floor FALLS (or holds) with severity — URLLC gets prioritized,
-        so less eMBB is guaranteed at higher severity. Must move the SAME direction as
-        SEVERITY_ALPHA['embb'] (also decreasing); the opposite would contradict the
-        URLLC-priority design (audit 2026-06-16)."""
+    def test_cmdp_embb_floor_fixed_across_severity(self):
+        """eMBB throughput floor is a FIXED severity-independent 10 Mbps SLA
+        (formulation-audit Gate 7, 2026-06-20). Decoupling C3 from severity avoids
+        the reward↔C3 contradiction: the reward already deprioritizes eMBB at high
+        severity (SEVERITY_ALPHA['embb'] still decreasing), so a severity-keyed or
+        high floor would fight the reward. C3 is a clean starvation safety net."""
         from utils.config import CMDP_D_J_SEVERITY, SEVERITY_ALPHA
         d3 = [CMDP_D_J_SEVERITY[s]["d3_embb_mbps"] for s in range(1, 6)]
         ae = [SEVERITY_ALPHA[s]["embb"] for s in range(1, 6)]
-        assert all(d3[i] >= d3[i + 1] for i in range(4)), f"d3 must be non-increasing: {d3}"
-        assert d3[0] > d3[4]                                   # strictly lower at top severity
-        assert all(ae[i] > ae[i + 1] for i in range(4))        # α_embb co-directional (both ↓)
+        assert d3 == [10.0] * 5, f"d3 must be a fixed 10 Mbps floor: {d3}"
+        assert all(ae[i] > ae[i + 1] for i in range(4))        # α_embb still ↓ (reward decoupled from C3)
 
     def test_lambda_warm_mean_non_decreasing(self):
         """Warm-start dual magnitude rises with severity (tighter constraints)."""
@@ -335,15 +334,16 @@ class TestSeverityMonotonicity:
         assert all(means[i] <= means[i + 1] for i in range(4))
         assert means[0] < means[4]
 
-    def test_lambda_warm_c3_slot_non_increasing(self):
-        """λ_warm C3 slot (index 2) is NON-INCREASING — co-directional with the
-        non-increasing d3_embb floor (audit 2026-06-17). A future flip of one
-        without the other would re-introduce the reward↔constraint contradiction."""
+    def test_lambda_warm_c3_slot_fixed(self):
+        """λ_warm C3 slot (index 2) is FIXED at 0.02 — co-directional with the
+        fixed (severity-independent) 10 Mbps d3_embb floor (Gate 7, 2026-06-20).
+        Both must stay flat together; keying one to severity without the other
+        would re-introduce the reward↔constraint coupling the fix removed."""
         from utils.config import LAMBDA_WARM, CMDP_D_J_SEVERITY
         c3_warm = [LAMBDA_WARM[s][2] for s in range(1, 6)]
         d3 = [CMDP_D_J_SEVERITY[s]["d3_embb_mbps"] for s in range(1, 6)]
-        assert all(c3_warm[i] >= c3_warm[i + 1] for i in range(4)), f"C3 warm must be ↓: {c3_warm}"
-        assert all(d3[i] >= d3[i + 1] for i in range(4)), f"d3_embb must be ↓: {d3}"
+        assert c3_warm == [0.02] * 5, f"C3 warm must be fixed: {c3_warm}"
+        assert d3 == [10.0] * 5, f"d3_embb must be fixed: {d3}"
 
 
 class TestConstraintBuilderGuards:
@@ -470,6 +470,7 @@ class TestIntraSlicePrbSplit:
         from env.oran_env import EnvConfig, ORANEnv
         env = ORANEnv(EnvConfig(K_ambulances=3))
         env.reset(seed=0)
+        env.active_mask = np.ones(3, dtype=bool)   # unit-test splitter with all active (SUMO entry staggered)
         env.severity_per_amb = np.array(severity, dtype=np.int64)
         env._beta = float(beta)
         lam = np.zeros(4 * 3 + 1, dtype=np.float64)
@@ -478,57 +479,45 @@ class TestIntraSlicePrbSplit:
         env._lambda_local = lam
         return env
 
-    def test_softmax_weighted_split_remainder_to_largest_fracs(self):
-        """B_U=100, sev=[1,2,3], β=1, ũ=0.
+    def test_pure_rl_uniform_without_lambda(self):
+        """Pure RL: zero λ + zero logits → uniform split (no severity rule)."""
+        env = self._env_k3([1, 3, 5], beta=1.0)
+        env._prb_weights = np.zeros(3, dtype=np.float64)
+        env.last_sinr_db = np.array([-15.0, -15.0, -15.0])
+        out = env._prb_split_intra_slice(20)
+        assert int(out.sum()) == 20
+        spread = out.max() - out.min()
+        assert spread <= 2, f"Zero λ should be ~uniform, got {out}"
+        env.close()
 
-        Severity NORMALIZED (÷5) before softmax: sev=[1,2,3] → [0.2,0.4,0.6].
-        b = floor(0.5·100/3) = 16, S = 100 − 48 = 52, ũ=0 (λ=0).
-        softmax(1·[0.2,0.4,0.6]) = [0.2693,0.3290,0.4018]
-        floor(52·w) = [14,17,20] (sum 51); remainder 1 → largest frac (amb2 .89)
-        → [14,17,21]; +16 each → [30,33,37].
-        """
-        env = self._env_k3([1, 2, 3], beta=1.0)
+    def test_pure_rl_logits_drive_ordering(self):
+        """Pure RL: Worker logits drive PRB ordering. No λ in allocation."""
+        env = self._env_k3([1, 3, 5], beta=1.0)
+        env._prb_weights = np.array([0.0, 2.0, 5.0], dtype=np.float64)
+        env.last_sinr_db = np.array([-15.0, -15.0, -15.0])
+        out = env._prb_split_intra_slice(20)
+        assert int(out.sum()) == 20
+        assert out[2] >= out[1] >= out[0], f"logit-driven order failed: {out}"
+        env.close()
+
+    def test_pure_rl_logits_drive_allocation(self):
+        """Pure RL: Worker logits directly control PRB split (zero λ)."""
+        env = self._env_k3([5, 1, 1], beta=0.0)
+        env._prb_weights = np.array([5.0, 0.0, 0.0], dtype=np.float64)
+        env.last_sinr_db = np.array([-15.0, -15.0, -15.0])
+        out = env._prb_split_intra_slice(30)
+        assert int(out.sum()) == 30
+        assert out[0] > out[1], f"Logit[0]=5 but amb_0={out[0]} <= amb_1={out[1]}"
+        env.close()
+
+    def test_logit_tiebreaker_same_severity(self):
+        """Equal severity and equal SINR; logits differ → drives allocation."""
+        env = self._env_k3([3, 3, 3], beta=2.0)
+        env._prb_weights = np.array([0.0, 1.0, 3.0], dtype=np.float64)
+        env.last_sinr_db = np.array([-5.0, -5.0, -5.0])
         out = env._prb_split_intra_slice(100)
-        assert out.tolist() == [30, 33, 37]
-        assert int(out.sum()) == 100          # budget exhausted exactly
-        assert out[0] < out[1] < out[2]       # monotone in severity
-        env.close()
-
-    def test_high_beta_concentrates_on_top_severity(self):
-        """B_U=200, sev=[1,3,5], β=5 (max gain) → most remainder to severity-5 amb.
-
-        Severity NORMALIZED: sev=[1,3,5] → [0.2,0.6,1.0]; logits = 5·[.2,.6,1]
-        = [1,3,5] (β=5 normalized ≡ raw-β=1 — normalization tames the old extreme).
-        b = floor(0.5·200/3) = 33, S = 200 − 99 = 101 → result [35,45,120].
-        """
-        env = self._env_k3([1, 3, 5], beta=5.0)
-        out = env._prb_split_intra_slice(200)
-        assert out.tolist() == [35, 45, 120]
-        assert int(out.sum()) == 200
-        assert out[0] < out[1] < out[2]       # monotone in severity
-        env.close()
-
-    def test_s_le_zero_returns_uniform_floor(self):
-        """B_U=3, K=3 → b=1, K·b=3=B_U, S=0 → uniform [1,1,1] regardless of severity."""
-        env = self._env_k3([1, 3, 5], beta=5.0)
-        out = env._prb_split_intra_slice(3)
-        assert out.tolist() == [1, 1, 1]
-        env.close()
-
-    def test_urgency_tiebreaker_breaks_equal_severity(self):
-        """Equal severity [3,3,3], β=2, λ_C1=[0,.5,1] → ũ=[0,.5,1], δ=0.30.
-
-        Normalized severity term β·(3/5)=1.2 is EQUAL across ambulances → cancels
-        in softmax (shift-invariant); only the δ·ũ tiebreaker differentiates.
-        logits = 1.2 + 0.30·ũ = [1.2, 1.35, 1.5]; result [31,33,36] (identical to
-        the raw-severity version — equal-severity tiebreaker path is unaffected by
-        normalization). Strictly increasing in λ_C1 (urgency tiebreaker wired).
-        """
-        env = self._env_k3([3, 3, 3], beta=2.0, lambda_c1=[0.0, 0.5, 1.0])
-        out = env._prb_split_intra_slice(100)
-        assert out.tolist() == [31, 33, 36]
         assert int(out.sum()) == 100
-        assert out[0] < out[1] < out[2]      # monotone in C1 urgency
+        assert out[2] >= out[1] >= out[0]
         env.close()
 
     def test_budget_invariant_random_sweep(self):

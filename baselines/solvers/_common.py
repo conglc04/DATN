@@ -115,7 +115,7 @@ def estimate_constraints(
 
 
 # ============================================================
-# Manager state construction (shared by PPO train.py + TD3/SAC smoke_train.py)
+# Manager state construction (shared by PPO train.py + TD3/SAC train_offpolicy.py)
 # ============================================================
 
 
@@ -154,6 +154,24 @@ def _manager_act(manager, s_H: np.ndarray) -> np.ndarray:
     return np.asarray(result, dtype=np.float32)
 
 
+def value_bootstrap_is_terminal(terminated: bool) -> bool:
+    """Whether the value bootstrap must be ZEROED at an episode boundary.
+
+    Returns True ONLY on a true MDP terminal (``terminated`` — e.g. all ambulances
+    arrived). A time-limit TRUNCATION (the 400 s mission timeout) is NOT terminal:
+    its final state is a valid continuation state, so the critic must bootstrap
+    V(s') rather than assume 0 (Pardo et al. 2018, "Time Limits in RL"; Gymnasium
+    terminated/truncated split).
+
+    Both training loops MUST pass ``terminated`` (NOT ``terminated or truncated``)
+    as the value-bootstrap flag — PPO via the GAE per-step done mask + rollout
+    last_value, TD3/SAC via the TD-target ``(1 - done)`` mask. Passing the merged
+    ``done`` injects a spurious V=0 terminal on every timeout, biasing the critic
+    downward. This is the single source of truth for that rule.
+    """
+    return bool(terminated)
+
+
 # ============================================================
 # Observation masking — for "w/o severity" ablation solvers
 # ============================================================
@@ -178,7 +196,7 @@ def mask_severity(
     for each ambulance k, its per-ambulance severity_k_norm slot (B5 epic
     2026-06-15) — otherwise "w/o severity" ablations would still leak
     severity_k through the per-ambulance block. ``K`` is inferred from
-    ``obs.shape`` (20 + 10K + F) when not given explicitly.
+    ``obs.shape`` (20 + 11K + F) when not given explicitly.
     """
     out = obs.copy()
     out[start : start + length] = 0.0

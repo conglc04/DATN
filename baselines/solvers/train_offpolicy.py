@@ -1,14 +1,17 @@
-"""Smoke training driver for solvers + Phase 3 sibling solvers.
+"""Off-policy training driver for the TD3 / SAC sibling solvers.
 
-W07 refactor: dispatches between **NEW** LambdaState API (5-dim λ, used by
-TD3 + SAC as Phase 3 siblings to PPO) and the **OLD**
-CMDPLagrangian API (2-dim λ, kept for ablation variants like b2_hrl_ppo_soft,
-pa_ppo_soft, ppo_cmdp_flat that are NOT Phase 3 siblings — only used in Exp6).
+TD3 and SAC are SIBLING SOLVERS to PPO (train.py): same env, same CMDP, same
+HRL Manager+Worker, same (4K+1)-dim LambdaState, same pure-RL allocation, same episode
+definition. The ONLY difference is the RL core (off-policy replay vs PPO's
+on-policy GAE) — a legitimate algorithmic difference, not a problem built for
+any one solver (see test_solver_parity).
+
+Episode = ONE FULL MISSION: `while not (terminated or truncated)` runs the env
+to all-arrived / episode_duration_sec timeout (identical to train.py PPO).
 
 Usage:
-    python -m solvers.smoke_train --baseline static_slicing --episodes 100
-    python -m solvers.smoke_train --baseline sac --episodes 100 --hard
-    python -m solvers.smoke_train --baseline td3 --episodes 100 --hard
+    python -m solvers.train_offpolicy --baseline sac --episodes 100 --hard
+    python -m solvers.train_offpolicy --baseline td3 --episodes 100 --hard
 """
 
 from __future__ import annotations
@@ -23,22 +26,22 @@ import numpy as np
 from agents.manager_agent import decode_manager_action
 from agents.ppo_agent import RolloutBuffer
 from env.oran_env import EnvConfig, ORANEnv
-from solvers._common import _manager_act, build_manager_state
+from solvers._common import _manager_act, build_manager_state, value_bootstrap_is_terminal
 from utils.checkpointing import (
     latest_ckpt_path,
     load_train_state,
     save_train_state,
     state_path,
 )
-from utils.config import WORKER_STEPS_PER_MANAGER
+from utils.config import GAMMA, REWARD_FIXED_SCALE, WORKER_STEPS_PER_MANAGER
 from utils.early_stopping import EarlyStopping
 from utils.logger import Logger
 from utils.obs import overlay_lambda_local  # single-source λ overlay (shared with train.py)
 
 
 BASELINE_REGISTRY = {
-    "td3":            "solvers.td3:TD3Baseline",
-    "sac":            "solvers.sac:SACBaseline",
+    "td3":            "solvers.td3:TD3Solver",
+    "sac":            "solvers.sac:SACSolver",
 }
 
 
@@ -66,6 +69,8 @@ def train(
     checkpoint_dir: str = "checkpoints",
     checkpoint_every: int = 500,
     hard_mission: bool = False,
+    macro_mission: bool = False,
+    K_ambulances: int = 1,
     enforce_c3: bool = False,  # DEPRECATED — env reward is always pure Phase 2.1
     early_stop: bool = False,
     early_stop_patience: int = 300,
@@ -83,14 +88,21 @@ def train(
             "enforce_c3=True is deprecated. Reward is always pure Phase 2.1; "
             "C3 handled via Lagrangian λ_3.", DeprecationWarning, stacklevel=2,
         )
-    if hard_mission:
+    if macro_mission:
+        # Full SUMO mission (K=3 UMa 1km, episode = journey until all-arrived/400s).
+        # Same env definition as PPO (train.py) → fair 3-solver comparison.
+        from env.oran_env import macro_mission_config
+        env_cfg = macro_mission_config(K_ambulances=K_ambulances)
+    elif hard_mission:
         from env.oran_env import hard_mission_config
-        env_cfg = hard_mission_config()
+        env_cfg = hard_mission_config(K_ambulances=K_ambulances)
     else:
         env_cfg = EnvConfig(
             initial_severity=initial_severity,
             urllc_arrival_rate=urllc_lambda,
             M_eMBB=M_eMBB,
+            K_ambulances=K_ambulances,
+            sample_severity=True,
         )
     env = ORANEnv(config=env_cfg, seed=seed)
     state_dim = env.observation_space.shape[0]
@@ -114,12 +126,17 @@ def train(
                 )
             agent.load(str(latest))
             resume_start_ep = int(st["last_ep"])
-            print(f"[{baseline_name}] RESUME from ep {resume_start_ep} (latest, seed={seed})")
+            lam_st = st.get("lambda_state")
+            if lam_st is not None:
+                agent.lambda_state.load_state_dict(lam_st)
+                print(f"[{baseline_name}] RESUME from ep {resume_start_ep} (with LambdaState, seed={seed})")
+            else:
+                print(f"[{baseline_name}] RESUME from ep {resume_start_ep} (no LambdaState in ckpt, seed={seed})")
         else:
             print(f"[{baseline_name}] --resume requested but no latest at {state_file} — starting fresh")
 
     logger = Logger(
-        run_name=f"smoke_{baseline_name}_seed{seed}",
+        run_name=f"{baseline_name}_seed{seed}",
         log_dir=log_dir,
         use_tensorboard=False,
         use_wandb=use_wandb,
@@ -129,8 +146,11 @@ def train(
         "baseline": baseline_name,
         "n_episodes": n_episodes,
         "seed": seed,
+        "K_ambulances": K,
         "state_dim": state_dim,
+        "action_dim": action_dim,
         "initial_severity": initial_severity,
+        "sample_severity": env.config.sample_severity,
     })
 
     # Detect API surface
@@ -164,6 +184,10 @@ def train(
     episode_rewards = []
     final_stats: dict = {}
 
+    # Fixed reward scale (replaces adaptive ReturnNormalizer, audit 2026-06-22).
+    # Same constant for all 3 solvers → fair comparison preserved.
+    reward_scale = float(REWARD_FIXED_SCALE)
+
     # Auto-resume treats n_episodes as the TARGET total → run only the remaining.
     # Manual resume_checkpoint keeps offset semantics (n_episodes = increment;
     # required by run_30runs.py). Fresh run: n_iters == n_episodes.
@@ -181,14 +205,21 @@ def train(
             severity_init = int(info["severity"])
             agent.on_episode_start(severity_per_amb_init, severity_init)
             agent.on_manager_step_start(severity_per_amb_init, severity_init)
+        # (fixed-scale: no per-episode reset needed — scale is constant)
 
         ep_reward = 0.0
+        ep_reward_normalized = 0.0   # fix D: sum of what the critic actually saw
         worker_step_idx = 0
         terminated = truncated = False
+        # Accumulate n_active and per-ambulance active MAC-tick count for metrics.
+        ep_n_active_sum = 0
+        ep_steps = 0
+        ep_active_count_per_amb = np.zeros(K, dtype=np.float64)
         # State carries the λ active for THIS decision (built post warm-start sync).
         s = _state_with_lambda(obs)
         # Manager initialization — set RRM budget for the first Manager window
         r_H_acc = 0.0
+        intra_window_step = 0
         s_H_prev = None
         a_H_raw_prev = None
         if has_manager and has_lambda_state:
@@ -201,6 +232,10 @@ def train(
             action, log_prob, value = agent.select_action(s)
             next_obs, reward, terminated, truncated, info = env.step(action)
             done = bool(terminated or truncated)
+            ep_n_active_sum += int(info.get("n_active", K))
+            ep_steps += 1
+            if "active_count_per_amb" in info:
+                ep_active_count_per_amb += info["active_count_per_amb"]
 
             # === Augmented reward + λ accumulation (use the λ embedded in `s`) ===
             if has_lambda_state:
@@ -228,8 +263,14 @@ def train(
                     else float(reward)
                 )
 
+            aug_raw = float(aug)
+            aug = aug_raw / reward_scale
+            ep_reward_normalized += float(aug)   # what the critic saw
+
             if has_manager:
-                r_H_acc += float(aug)
+                # SMDP-discounted intra-window return (must match PPO path in train.py)
+                r_H_acc += (GAMMA ** intra_window_step) * float(aug)
+                intra_window_step += 1
 
             worker_step_idx += 1
 
@@ -245,9 +286,13 @@ def train(
                 if has_manager:
                     s_H_next_mgr = build_manager_state(next_obs, agent.lambda_state.get_lambda_global())
                     if s_H_prev is not None:
-                        agent.manager.store(s_H_prev, a_H_raw_prev, r_H_acc, s_H_next_mgr, done)
+                        # TD-target bootstrap mask = terminated (true terminal), NOT done:
+                        # a 400s timeout truncation is non-terminal (value_bootstrap_is_terminal).
+                        agent.manager.store(s_H_prev, a_H_raw_prev, r_H_acc, s_H_next_mgr,
+                                            value_bootstrap_is_terminal(terminated))
                         agent.manager.update()
                     r_H_acc = 0.0
+                    intra_window_step = 0
                 if not done:
                     severity_per_amb_now = tuple(int(s) for s in info["severity_per_amb"])
                     severity_ref_now = int(info["severity"])
@@ -262,29 +307,42 @@ def train(
             s_next = _state_with_lambda(next_obs)
 
             # === Store transition / sample (PPO buffer vs TD3 off-policy) ===
+            # Value-bootstrap mask = terminated (true terminal), NOT done: a 400s
+            # timeout truncation is non-terminal and must bootstrap V(s')
+            # (value_bootstrap_is_terminal). `done` stays only for loop/episode control.
+            bootstrap_terminal = value_bootstrap_is_terminal(terminated)
             if buffer is not None:
                 buffer.add(
                     agent.maybe_mask(s).astype(np.float32), action.astype(np.float32),
-                    log_prob, aug, value, done,
+                    log_prob, aug, value, bootstrap_terminal,
                 )
             elif is_off_policy:
                 # store_transition applies maybe_mask internally; s / s_next
                 # already carry λ (and the severity one-hot for severity-aware solvers).
-                agent.store_transition(s, action.astype(np.float32), aug, s_next, done)
+                agent.store_transition(s, action.astype(np.float32), aug, s_next, bootstrap_terminal)
                 agent.update()
 
             obs = next_obs
             s = s_next
-            ep_reward += float(aug)
+            ep_reward += aug_raw   # RAW augmented reward (diagnostics); training uses normalized
 
             if buffer is not None and buffer.full:
-                buffer.compute_gae(last_value=0.0)
+                # Mid-episode buffer flush: ALWAYS bootstrap V(s') — the cut is not a
+                # terminal (mirrors PPO rollout-cut handling in train.py).
+                _, _, boot_v = agent.select_action(s, deterministic=True)
+                buffer.compute_gae(last_value=float(boot_v))
                 agent.update(buffer)
                 buffer.reset()
 
-        # End of episode — flush remaining buffer
+        # End of episode — flush remaining buffer. Zero the bootstrap ONLY on a true
+        # terminal; a 400s timeout truncation bootstraps V(s') (value_bootstrap_is_terminal).
         if buffer is not None and buffer.ptr > 0:
-            buffer.compute_gae(last_value=0.0)
+            if value_bootstrap_is_terminal(terminated):
+                last_value = 0.0
+            else:
+                _, _, boot_v = agent.select_action(s, deterministic=True)
+                last_value = float(boot_v)
+            buffer.compute_gae(last_value=last_value)
             agent.update(buffer)
             buffer.reset()
 
@@ -294,11 +352,14 @@ def train(
             agent.on_manager_step_end()
             if has_manager and s_H_prev is not None:
                 s_H_final = build_manager_state(obs, agent.lambda_state.get_lambda_global())
-                agent.manager.store(s_H_prev, a_H_raw_prev, r_H_acc, s_H_final, True)
+                # Final partial Manager window: bootstrap mask = terminated, NOT hardcoded
+                # True — a 400s timeout truncation is non-terminal (value_bootstrap_is_terminal).
+                agent.manager.store(s_H_prev, a_H_raw_prev, r_H_acc, s_H_final,
+                                    value_bootstrap_is_terminal(terminated))
                 agent.manager.update()
         if has_lambda_state:
             lam_for_log = agent.lambda_state.get_lambda_global()
-            lambda_severity_for_log = str(list(agent.lambda_state.sev_prev))
+            severity_per_amb_logged = str(list(agent.lambda_state.sev_prev))
             severity_per_amb_final = tuple(int(s) for s in info["severity_per_amb"])
             severity_ref_final = int(info["severity"])
             agent.lambda_state.on_episode_end(severity_per_amb_final, severity_ref_final)
@@ -317,16 +378,23 @@ def train(
         mean_e2e_ms = env.mean_e2e_ms()
         viol = env.episode_violation_rate()
         episode_rewards.append(ep_reward)
+        mean_n_active = ep_n_active_sum / ep_steps if ep_steps > 0 else 0.0
         metrics: dict = {
             "ep_reward": ep_reward,
+            "ep_reward_normalized": ep_reward_normalized,   # fix D: sum of critic-seen reward
             "mean_e2e_ms": mean_e2e_ms,
             "viol_rate": viol,
             "mean_embb_mbps": env.mean_embb_mbps(),
             "c3_viol_rate": env.c3_violation_rate(),
+            "mean_aoi_ms": env.mean_aoi_ms(),
+            "aoi_viol_rate": env.aoi_violation_rate(),
+            "mean_n_active": mean_n_active,
         }
+        for k in range(K):
+            metrics[f"active_mac_ticks_amb{k}"] = float(ep_active_count_per_amb[k])
         if has_lambda_state:
             lam = lam_for_log
-            metrics["lambda_severity_per_amb"] = lambda_severity_for_log
+            metrics["severity_per_amb"] = severity_per_amb_logged
             for k in range(K):
                 metrics[f"lambda_global_C1_{k}"] = float(lam[k])
                 metrics[f"lambda_global_C2_{k}"] = float(lam[K + k])
@@ -343,6 +411,8 @@ def train(
             "viol_rate": viol,
             "mean_embb_mbps": env.mean_embb_mbps(),
             "c3_viol_rate": env.c3_violation_rate(),
+            "mean_aoi_ms": env.mean_aoi_ms(),
+            "aoi_viol_rate": env.aoi_violation_rate(),
         }
 
         if checkpoint_every > 0 and ((ep + 1) % checkpoint_every == 0 or ep == n_iters - 1):
@@ -355,9 +425,15 @@ def train(
 
         # Rolling auto-save AFTER EVERY episode (overwrites; for --resume).
         try:
+            ckpt_dir.mkdir(parents=True, exist_ok=True)
             agent.save(str(latest))
             save_train_state(state_file, last_ep=global_ep + 1, seed=seed,
-                             extra={"baseline": baseline_name, "n_episodes_target": n_episodes})
+                             extra={
+                                 "baseline": baseline_name,
+                                 "n_episodes_target": n_episodes,
+                                 "lambda_state": agent.lambda_state.state_dict(),
+                                 "reward_fixed_scale": reward_scale,
+                             })
         except Exception as exc:
             print(f"[autosave] {baseline_name} latest save skipped: {exc}")
 
@@ -428,33 +504,103 @@ def train(
     return summary
 
 
+def _build_offpolicy_parser(include_baseline: bool) -> argparse.ArgumentParser:
+    """Shared CLI for the off-policy solvers.
+
+    ``include_baseline=True`` keeps the legacy ``--baseline`` switch (main());
+    the per-solver entry points (train_td3.py / train_sac.py) pass False and
+    hard-code their baseline so TD3 and SAC are launched from SEPARATE files.
+    """
+    p = argparse.ArgumentParser(description="Off-policy solver training")
+    if include_baseline:
+        p.add_argument("--baseline", required=True, choices=list(BASELINE_REGISTRY))
+    p.add_argument("--episodes", type=int, default=100)
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--log-dir", type=str, default="logs")
+    p.add_argument("--severity", type=int, default=5,
+                   help="Fixed patient severity 1..5 (NON_URGENT..IMMEDIATE)")
+    p.add_argument("--device", type=str, default="cuda")
+    p.add_argument("--print-every", type=int, default=10)
+    p.add_argument("--checkpoint-every", type=int, default=500)
+    p.add_argument("--checkpoint-dir", type=str, default=None,
+                   help="Checkpoint directory. Defaults to <log-dir>/checkpoints if not set.")
+    p.add_argument("--wandb", action="store_true")
+    p.add_argument("--hard", action="store_true", help="Use the hard-mission preset")
+    p.add_argument("--macro", action="store_true",
+                   help="Use W15-B2 macro mission. Defaults to K=3 unless --K is set.")
+    p.add_argument("--K", dest="K_ambulances", type=int, default=None,
+                   help="Number of ambulances. Defaults to 3 for --macro and 1 otherwise.")
+    p.add_argument("--enforce-c3", action="store_true",
+                   help="DEPRECATED — reward is always pure Phase 2.1")
+    p.add_argument("--resume", action="store_true",
+                   help="Auto-resume from the rolling *_latest.pt checkpoint for this seed.")
+    return p
+
+
+def run_cli(baseline_name: str, argv: list[str] | None = None) -> int:
+    """Entry point for a SINGLE off-policy solver (used by train_td3 / train_sac)."""
+    args = _build_offpolicy_parser(include_baseline=False).parse_args(argv)
+    K_ambulances = args.K_ambulances if args.K_ambulances is not None else (3 if args.macro else 1)
+    run_dir = str(Path(args.log_dir) / f"{baseline_name}_K{K_ambulances}_seed{args.seed}")
+    if args.checkpoint_dir is None:
+        args.checkpoint_dir = str(Path(run_dir) / "checkpoints")
+    if args.device == "cuda":
+        import torch
+        if not torch.cuda.is_available():
+            print("[warn] CUDA not available, falling back to CPU")
+            args.device = "cpu"
+    train(
+        baseline_name=baseline_name, n_episodes=args.episodes, seed=args.seed,
+        log_dir=run_dir, initial_severity=args.severity, device=args.device,
+        print_every=args.print_every, use_wandb=args.wandb,
+        checkpoint_dir=args.checkpoint_dir, checkpoint_every=args.checkpoint_every,
+        hard_mission=args.hard, macro_mission=args.macro, K_ambulances=K_ambulances,
+        enforce_c3=args.enforce_c3, resume=args.resume,
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="Smoke training for solvers")
+    p = argparse.ArgumentParser(description="Off-policy sibling solver training (TD3/SAC)")
     p.add_argument("--baseline", required=True, choices=list(BASELINE_REGISTRY))
     p.add_argument("--episodes", type=int, default=100)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--log-dir", type=str, default="logs")
     p.add_argument("--severity", type=int, default=5,
                    help="Fixed patient severity 1..5 (NON_URGENT..IMMEDIATE)")
-    p.add_argument("--device", type=str, default="cpu")
+    p.add_argument("--device", type=str, default="cuda")
     p.add_argument("--print-every", type=int, default=10)
     p.add_argument("--checkpoint-every", type=int, default=500)
-    p.add_argument("--checkpoint-dir", type=str, default="checkpoints")
+    p.add_argument("--checkpoint-dir", type=str, default=None,
+                   help="Checkpoint directory. Defaults to <log-dir>/checkpoints if not set.")
     p.add_argument("--wandb", action="store_true")
     p.add_argument("--hard", action="store_true",
                    help="Use the hard-mission preset")
+    p.add_argument("--macro", action="store_true",
+                   help="Use W15-B2 macro mission. Defaults to K=3 unless --K is set.")
+    p.add_argument("--K", dest="K_ambulances", type=int, default=None,
+                   help="Number of ambulances. Defaults to 3 for --macro and 1 otherwise.")
     p.add_argument("--enforce-c3", action="store_true",
                    help="DEPRECATED — reward is always pure Phase 2.1")
     p.add_argument("--resume", action="store_true",
                    help="Auto-resume from the rolling *_latest.pt checkpoint for this seed "
                         "and continue toward --episodes (uses the per-episode auto-save).")
     args = p.parse_args(argv)
+    K_ambulances = args.K_ambulances if args.K_ambulances is not None else (3 if args.macro else 1)
+    run_dir = str(Path(args.log_dir) / f"{args.baseline}_K{K_ambulances}_seed{args.seed}")
+    if args.checkpoint_dir is None:
+        args.checkpoint_dir = str(Path(run_dir) / "checkpoints")
+    if args.device == "cuda":
+        import torch
+        if not torch.cuda.is_available():
+            print("[warn] CUDA not available, falling back to CPU")
+            args.device = "cpu"
 
     train(
         baseline_name=args.baseline,
         n_episodes=args.episodes,
         seed=args.seed,
-        log_dir=args.log_dir,
+        log_dir=run_dir,
         initial_severity=args.severity,
         device=args.device,
         print_every=args.print_every,
@@ -462,6 +608,8 @@ def main(argv: list[str] | None = None) -> int:
         checkpoint_dir=args.checkpoint_dir,
         checkpoint_every=args.checkpoint_every,
         hard_mission=args.hard,
+        macro_mission=args.macro,
+        K_ambulances=K_ambulances,
         enforce_c3=args.enforce_c3,
         resume=args.resume,
     )

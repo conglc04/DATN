@@ -70,7 +70,7 @@ def test_c3_signed_gap_sign_convention(monkeypatch):
     from utils.config import CMDP_D_J_SEVERITY
 
     sev = 3
-    r_min = float(CMDP_D_J_SEVERITY[sev]["d3_embb_mbps"])  # 20.0 Mbps floor
+    r_min = float(CMDP_D_J_SEVERITY[sev]["d3_embb_mbps"])  # 10.0 Mbps fixed floor (Gate 7)
     C3 = 4  # K=1 shared slot (4K)
 
     # --- eMBB STARVED: R_eMBB = R_min - 10 < R_min -> violation -> gap > 0 ---

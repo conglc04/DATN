@@ -1,0 +1,135 @@
+% ============================================================
+%  Đồ án Tốt nghiệp — main.tex (Overleaf-ready)
+%  Biên dịch: pdflatex -> bibtex -> pdflatex x2
+% ============================================================
+\documentclass[a4paper,12pt,oneside]{report}
+
+% --- Mã hoá & ngôn ngữ ---
+\usepackage[utf8]{inputenc}
+\usepackage[T5]{fontenc}           % bảng mã T5 cho tiếng Việt
+\usepackage[vietnamese]{babel}
+
+% --- Toán ---
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}             % boxed, dcases …
+\usepackage{bm}                    % bold math
+
+% --- Bảng ---
+\usepackage{booktabs}              % toprule/midrule/bottomrule
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{longtable}
+
+% --- Hình ---
+\usepackage{graphicx}
+\graphicspath{{figures/}}
+\usepackage[font=small,labelfont=bf]{caption}
+\usepackage{subcaption}
+
+% --- Mã nguồn ---
+\usepackage{listings}
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  xleftmargin=2em,
+  framexleftmargin=1.5em,
+}
+
+% --- Tham chiếu ---
+\usepackage[hidelinks]{hyperref}
+\usepackage{cleveref}              % \cref tự thêm "Hình", "Bảng"…
+
+% --- Trang ---
+\usepackage[left=3cm,right=2cm,top=2.5cm,bottom=2.5cm]{geometry}
+\usepackage{setspace}
+\onehalfspacing                    % giãn dòng 1.5
+
+% --- Danh mục viết tắt ---
+\usepackage[acronym,toc]{glossaries}
+\makeglossaries
+\newacronym{oran}{O-RAN}{Open Radio Access Network}
+\newacronym{ric}{RIC}{RAN Intelligent Controller}
+\newacronym{prb}{PRB}{Physical Resource Block}
+\newacronym{urllc}{URLLC}{Ultra-Reliable Low-Latency Communication}
+\newacronym{embb}{eMBB}{enhanced Mobile Broadband}
+\newacronym{aoi}{AoI}{Age of Information}
+\newacronym{cmdp}{CMDP}{Constrained Markov Decision Process}
+\newacronym{smdp}{SMDP}{Semi-Markov Decision Process}
+\newacronym{hrl}{HRL}{Hierarchical Reinforcement Learning}
+\newacronym{ppo}{PPO}{Proximal Policy Optimization}
+\newacronym{td3}{TD3}{Twin Delayed DDPG}
+\newacronym{sac}{SAC}{Soft Actor-Critic}
+\newacronym{gae}{GAE}{Generalized Advantage Estimation}
+\newacronym{ats}{ATS}{Australasian Triage Scale}
+\newacronym{sinr}{SINR}{Signal-to-Interference-plus-Noise Ratio}
+
+% --- Tiện ích ---
+\newcommand{\sev}{\mathrm{sev}}
+\newcommand{\sevref}{\mathrm{sev}_{\mathrm{ref}}}
+\newcommand{\brrm}{b_{\mathrm{rrm}}}
+\newcommand{\Rref}{R_{\mathrm{REF}}}
+\newcommand{\Rmin}{R_{\min}}
+\newcommand{\Dmax}{D_{\max}}
+\newcommand{\etal}{\textit{et al.}}
+
+% ============================================================
+\begin{document}
+
+% --------------- Trang bìa ---------------
+\begin{titlepage}
+\centering
+\vspace*{1cm}
+
+{\large \textbf{TRƯỜNG ĐẠI HỌC BÁCH KHOA HÀ NỘI}}\\[0.3cm]
+{\large Viện Điện tử -- Viễn thông}\\[2cm]
+
+{\Large \textbf{ĐỒ ÁN TỐT NGHIỆP}}\\[1.5cm]
+
+{\LARGE \textbf{Phân bổ tài nguyên vô tuyến nhận biết mức độ nguy kịch cho đa xe cứu thương trong mạng 5G O-RAN:}}\\[0.5cm]
+{\LARGE \textbf{Tiếp cận Học tăng cường phân cấp ràng buộc}}\\[2cm]
+
+\begin{tabular}{r l}
+\textbf{Sinh viên:}     & ‹Họ tên›  \\
+\textbf{MSSV:}           & ‹MSSV›    \\
+\textbf{Giảng viên HD:}  & ‹Họ tên GVHD› \\
+\end{tabular}
+
+\vfill
+{\large Hà Nội, 2026}
+\end{titlepage}
+
+% --------------- Front matter ---------------
+\pagenumbering{roman}
+
+% --- Tóm tắt ---
+\chapter*{Tóm tắt}
+\addcontentsline{toc}{chapter}{Tóm tắt}
+\input{chapters/tom_tat}
+
+% --- Mục lục / Danh mục ---
+\tableofcontents
+\listoffigures
+\listoftables
+\printglossary[type=\acronymtype,title={Danh mục từ viết tắt}]
+
+% --------------- Main matter ---------------
+\pagenumbering{arabic}
+
+\input{chapters/chuong_01}
+\input{chapters/chuong_02}
+\input{chapters/chuong_03}
+\input{chapters/chuong_04}
+\input{chapters/chuong_05}
+\input{chapters/chuong_06}
+\input{chapters/chuong_07}
+
+% --------------- Tài liệu tham khảo ---------------
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+% --------------- Phụ lục ---------------
+\appendix
+\input{chapters/phu_luc}
+
+\end{document}

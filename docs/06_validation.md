@@ -10,9 +10,10 @@
 Ablation variants (equal-weight / phase-only / severity-only / full) → Table II (component study), KHÔNG phải solver. *(B3-RCPO cũ đã gỡ HOÀN TOÀN khỏi code + Table I; chỉ còn trong week docs lịch sử W07/W09/W11.)*
 
 ## Solver sweep (W18–W23, mobility = SUMO duy nhất, RWP bỏ)
-Sweep tuần tự **3 solver × K∈{1,3}** (6 cell), env config khóa (gNB=`(0,0)`, R_cell=300m, UMi single-cell, no handover):
+Sweep tuần tự **3 solver × K∈{1,3}** (6 cell), env config khóa (gNB=`(0,0)`, R_cell=1km, **UMa single-cell + interference margin −86 dBm/PRB**, no handover; `macro_mission_config`, W15-B2):
 - **PPO** K=1 [W18](weeks/W18_pha3_algorithm_code.md) → K=3 [W19](weeks/W19_pha3_ppo_k3.md); **TD3** K=1 [W20](weeks/W20_pha3_td3_k1.md) → K=3 [W21](weeks/W21_pha3_td3_k3.md); **SAC** K=1 [W22](weeks/W22_sac_k1.md) → K=3 [W23](weeks/W23_sac_k3.md).
 - **Table I** = 3 solver × K∈{1,3}: reward + C1–C5 violation-rate + λ-saturation. **Table II** (K=3) = severity/intra-slice metrics + ablation 2×2.
+- **Eval fairness — schedule cố định DÙNG CHUNG (BẮT BUỘC)**: training random theo seed, nhưng **evaluation 3 solver phải dùng CÙNG `--seed`** ⟹ cùng **severity sequence + traffic trace + channel trace** (env tất định: `reset()` seed cả `self.rng` lẫn `channel.rng`, [oran_env.py](../baselines/env/oran_env.py)). Mỗi solver eval bằng chuỗi severity ngẫu nhiên KHÁC nhau ⟹ so sánh PPO/TD3/SAC **không công bằng**. Verdict feasibility per-severity: `audit/feasibility_eval.py` (deterministic policy, `--seed` chung).
 
 ### Future work (D26, 2026-06-12)
 - **E3** AoI (LCFS vs FCFS, re-run SUMO) — C3 (AoI hard constraints, P3.4/P3.5) vẫn **built+tested và active** trong sweep; chỉ thực nghiệm minh chứng riêng bị demote.
@@ -24,6 +25,7 @@ Sweep tuần tự **3 solver × K∈{1,3}** (6 cell), env config khóa (gNB=`(0,
 - **Sample size**: 10 seeds = TỐI THIỂU; tăng 20–30 nếu CI rộng/overlap. **KHÔNG claim "thắng" nếu CI chồng lấn**; pre-register cặp so sánh.
 - **ε rare-event (#7)**: 1e-5 KHÔNG validate được bằng 10 seeds (cần ~10⁶–10⁷ mẫu). → báo cáo observed violation-rate + CI; **rule-of-three** `ε≤3/N`; KHÔNG vẽ "đạt ε=1e-5". IS/EVT = future.
 - **λ-saturation logging**: λ-trajectory + %step `λ==Λ_max`; flag saturation-without-convergence.
+- **"Solved" verdict (point 12, audit 2026-06-23)**: `ep_reward↑` KHÔNG chứng minh giải đúng CMDP (confound: eMBB↑ hy sinh URLLC / severity-mix / episode dài / reward-scale / λ nhỏ / overfit seed). Tiêu chí đúng = **PRIMAL FEASIBILITY conditioned theo severity** dưới policy deterministic trên held-out: C1/C4 mean ≤ budget, C3 shortfall=0, **C2/C5 tail 95%-upper ≤ ε CHỈ KHI N≥3/ε** (else `inconclusive`, KHÔNG phải certificate), reward/step **chỉ là chẩn đoán**. Tool: `audit/feasibility_eval.py` (tái dùng Clopper-Pearson của `eval_tail_bank.py`); test khóa `tests/test_feasibility_eval.py`.
 
 ## Metrics severity (Table II, K=3) — KHÔNG Jain toàn cục
 Jain thuần thưởng phân bổ ĐỀU ⟹ **mâu thuẫn** severity priority. Bộ metric đúng:
@@ -36,7 +38,7 @@ Jain thuần thưởng phân bổ ĐỀU ⟹ **mâu thuẫn** severity priority.
 Trục phase∈{off,on} × severity∈{off,on} → equal/phase-only/severity-only/full. Mỗi cặp kề khác đúng 1 trục → đo đóng góp riêng từng thành phần.
 
 ## Verification checklist
-- [ ] obs K=1=31 / K=3=51 (assert); action 6/7-dim (+β); reward single-term; 3 solver (PPO + TD3 + SAC).
+- [ ] obs K=1=32 / K=3=54 (assert; per-amb 11-dim incl. active_mask_k); Worker action 1-dim (K=1) / K-dim pure logits (K≥2, no β); Manager action 1-dim (b_rrm); reward single-term; 3 solver (PPO + TD3 + SAC).
 - [ ] Mọi M*/P*/A* có nhãn ✅/🟡/🔴; 0 citation gán file chưa mở.
 - [ ] structural guarantee (feasibility + ordering) verify bằng test.
 - [ ] KHÔNG over-claim: no zero-duality-gap, no regret bound, no fake vitals, no ε=1e-5 empirical.

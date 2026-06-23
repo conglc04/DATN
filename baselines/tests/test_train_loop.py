@@ -19,8 +19,8 @@ import pytest
 
 from agents.lagrangian import LambdaState
 from train import (
-    MANAGER_STEPS_PER_EPISODE,
-    WORKER_STEPS_PER_EPISODE,
+    MANAGER_STEPS_PER_ROLLOUT,
+    WORKER_STEPS_PER_ROLLOUT,
     build_manager_state,
     overlay_lambda_local,
     train_ppo,
@@ -32,6 +32,7 @@ from utils.config import (
     AMB_LAMBDA_C5_OFFSET,
     LAMBDA_C3_SHARED_OBS_INDEX,
     OBS_FIXED_BLOCK_LEN,
+    OBS_PER_AMB_BLOCK_LEN,
     SEVERITY_OH_OBS_INDEX,
 )
 
@@ -108,13 +109,13 @@ def test_overlay_lambda_local_does_not_mutate_input():
 
 def test_overlay_lambda_local_k3_per_amb_slots():
     K = 3
-    obs_dim = 20 + 10 * K + 1
+    obs_dim = OBS_FIXED_BLOCK_LEN + OBS_PER_AMB_BLOCK_LEN * K + 1
     obs = np.arange(obs_dim, dtype=np.float32)
     lam = np.arange(4 * K + 1, dtype=np.float64) / 10.0  # distinct values
     out = overlay_lambda_local(obs, lam, K=K)
 
     for k in range(K):
-        base = OBS_FIXED_BLOCK_LEN + 10 * k
+        base = OBS_FIXED_BLOCK_LEN + OBS_PER_AMB_BLOCK_LEN * k
         assert out[base + AMB_LAMBDA_C1_OFFSET] == pytest.approx(lam[k])
         assert out[base + AMB_LAMBDA_C2_OFFSET] == pytest.approx(lam[K + k])
         assert out[base + AMB_LAMBDA_C4_OFFSET] == pytest.approx(lam[2 * K + k])
@@ -151,8 +152,8 @@ def test_phase_transition_syncs_both_lambdas():
 
 
 def test_episode_step_counts():
-    assert MANAGER_STEPS_PER_EPISODE == 10
-    assert WORKER_STEPS_PER_EPISODE == 100  # 10 Manager × W=10 Worker
+    assert MANAGER_STEPS_PER_ROLLOUT == 10
+    assert WORKER_STEPS_PER_ROLLOUT == 100  # 10 Manager × W=10 Worker
 
 
 # ============================================================
@@ -186,6 +187,53 @@ def test_5_episode_smoke_no_nan(tmp_path):
         assert k in out, f"Missing key: {k}"
         if isinstance(out[k], (int, float)):
             assert np.isfinite(out[k]), f"NaN/Inf in {k}: {out[k]}"
+
+
+def test_k1_skips_worker_actor_update(tmp_path):
+    """K=1: Worker action is a true no-op (softmax([ℓ_0])=[1.0] always).
+    WorkerAgent.update() guards this internally (P1 fix: skip_actor =
+    action_dim==1, agents/worker_agent.py:217) — the ACTOR gradient is
+    skipped (worker_actor_loss stays exactly 0.0, hardcoded in that branch's
+    return dict), but the CRITIC still trains every rollout (worker_n_updates
+    stays >0, since update() is still called and still does useful work)."""
+    out = train_ppo(
+        n_episodes=2,
+        seed=0,
+        log_dir=str(tmp_path / "logs_k1"),
+        print_every=10_000,
+        checkpoint_every=0,
+        hard_mission=False,
+        K_ambulances=1,
+    )
+    assert out.get("worker_actor_skipped_k1") == 1, "K=1 must set worker_actor_skipped_k1"
+    assert out.get("worker_actor_loss", -1.0) == 0.0, (
+        f"K=1 actor loss must be exactly 0.0 (skipped), got {out.get('worker_actor_loss')}"
+    )
+    # Critic must still update (update() is still called every rollout).
+    assert out.get("worker_n_updates", 0) > 0, "Worker critic update must NOT be skipped at K=1"
+    # Manager must still update normally
+    assert out.get("manager_n_updates", 0) > 0, "Manager update must NOT be skipped at K=1"
+
+
+def test_k3_does_not_skip_worker_actor_update(tmp_path):
+    """K=3: Worker action is meaningful (softmax over 3 logits) — actor must
+    update normally (worker_actor_skipped_k1=0, nonzero actor loss)."""
+    out = train_ppo(
+        n_episodes=2,
+        seed=0,
+        log_dir=str(tmp_path / "logs_k3"),
+        print_every=10_000,
+        checkpoint_every=0,
+        hard_mission=False,
+        K_ambulances=3,
+    )
+    assert out.get("worker_actor_skipped_k1") == 0, "K=3 must NOT set worker_actor_skipped_k1"
+    assert out.get("worker_n_updates", 0) > 0, (
+        f"K=3 must NOT skip Worker PPO update, got worker_n_updates={out.get('worker_n_updates')}"
+    )
+    assert out.get("worker_actor_loss", 0.0) != 0.0, (
+        "K=3 actor loss should be nonzero (real gradient updates happened)"
+    )
 
 
 @pytest.mark.slow
@@ -226,5 +274,5 @@ def test_ppo_buffer_resets_each_episode(tmp_path):
         print_every=10_000,
         checkpoint_every=0,
     )
-    assert out.get("worker_n_samples", 0) <= WORKER_STEPS_PER_EPISODE
-    assert out.get("manager_n_samples", 0) <= MANAGER_STEPS_PER_EPISODE
+    assert out.get("worker_n_samples", 0) <= WORKER_STEPS_PER_ROLLOUT
+    assert out.get("manager_n_samples", 0) <= MANAGER_STEPS_PER_ROLLOUT

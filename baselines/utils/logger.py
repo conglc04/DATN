@@ -32,6 +32,7 @@ class Logger:
         wandb_project: str = "baselines",
         wandb_config: dict[str, Any] | None = None,
         append_csv: bool = False,  # If True, load existing metrics.csv and append
+        flush_every: int = 1,  # Flush CSV to disk every N log_dict calls
     ) -> None:
         self.run_name = run_name
         self.log_dir = Path(log_dir) / run_name
@@ -42,6 +43,8 @@ class Logger:
         self._csv_path = self.log_dir / "metrics.csv"
         self._csv_fieldnames: list[str] = []
         self._csv_rows: list[dict[str, Any]] = []
+        self._flush_every = flush_every
+        self._writes_since_flush = 0
 
         # Resume: load existing CSV rows so new rows are appended on close
         if append_csv and self._csv_path.exists():
@@ -88,9 +91,14 @@ class Logger:
     def log_dict(self, metrics: dict[str, float], step: int) -> None:
         row = {"step": step, **metrics}
         self._csv_write(row)
+        self._writes_since_flush += 1
+        if self._writes_since_flush >= self._flush_every:
+            self._csv_flush()
+            self._writes_since_flush = 0
         if self._tb_writer is not None:
             for k, v in metrics.items():
                 self._tb_writer.add_scalar(k, v, step)
+            self._tb_writer.flush()
         if self._wandb is not None:
             self._wandb.log(metrics, step=step)
 

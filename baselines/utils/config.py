@@ -13,7 +13,7 @@ Cross-reference:
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Final
+from typing import Any, Final
 
 import numpy as np
 
@@ -23,6 +23,9 @@ import numpy as np
 P_TOTAL: Final[int] = 273              # Total PRB @ 100MHz μ=1 (3GPP TS 38.101-1 Table 5.3.2-1)
 B_PRB: Final[float] = 360e3            # 360 kHz per PRB (12 subcarriers × 30 kHz SCS)
 B_TOTAL: Final[float] = 100e6          # 100 MHz total bandwidth (Viettel C-Band)
+                                        # Note: P_TOTAL × B_PRB = 273 × 360 kHz = 98.28 MHz < B_TOTAL.
+                                        # The 1.72 MHz gap is absorbed by guard bands at the band edges
+                                        # (3GPP TS 38.101-1 §5.3.3 — guard band not carried in the PRB grid).
 TTI_SEC: Final[float] = 0.5e-3         # 0.5 ms TTI (μ=1, 30 kHz SCS)
 F_CARRIER: Final[float] = 3.5e9        # 3.5 GHz carrier (FR1 n78)
 
@@ -37,7 +40,15 @@ F_CARRIER: Final[float] = 3.5e9        # 3.5 GHz carrier (FR1 n78)
 # ứng đúng tọa độ GPS này).
 BACH_MAI_LAT: Final[float] = 21.002965894776974
 BACH_MAI_LON: Final[float] = 105.84078002433277
-R_CELL_M: Final[float] = 300.0         # single-cell UMi radius quanh gNB=BV=(0,0), no handover
+R_CELL_M: Final[float] = 1000.0        # single-cell UMa radius quanh gNB=BV=(0,0) — W15-B2 macro (2026-06-18)
+# SUMO ambulance destination — centroid of edge 37370971#0 stopping positions.
+# FCD analysis (K=3-light): amb_0/amb_2 stop at (E=41.88m, N=15.82m);
+#   amb_1 at (E=51.44m, N=16.38m). Centroid (E=45.07m, N=16.00m) is 47.7m NE of gNB.
+# ARRIVAL_RADIUS_M=15m covers all 4 lanes (max lane deviation 6.38m);
+#   excludes gNB area (47.7m away) — prevents false positive if gNB moves.
+DEST_LAT: Final[float] = 21.003109667   # centroid lat of K3-light FCD stopping positions
+DEST_LON: Final[float] = 105.841213667  # centroid lon
+ARRIVAL_RADIUS_M: Final[float] = 15.0   # dist_to_destination arrival threshold (m)
 NUM_RU: Final[int] = 20                # RESERVED — multi-cell grid (5×4 O-RU); UNUSED in the
                                         # current single-cell UMi env. Provenance for a future
                                         # multi-cell extension. See REFERENCE_MAP §2. (audit 2026-06-16)
@@ -99,9 +110,27 @@ ODU_LOCAL_CHECK: Final[float] = 0.5e-3  # O-DU local 1-TTI check
 #   0.1 s freshness, 100× looser, status-update vs packet-delay timescales); the
 #   loosest (1.0 s @ severity 1) matches relaxed non-urgent monitoring. Absolute
 #   values NOT claimed as clinical fact. Sensitivity ±50% scheduled in REFERENCE_MAP §5.
+#
+# SEVERITY-TIER GRANULARITY (why some columns repeat across the 5 levels — by
+# design, NOT a bug; audit 2026-06-20). Every column is MONOTONICALLY tighter
+# (non-increasing) with severity, so the 5 levels form a strict QoS hierarchy
+# with no contradiction. The five levels are FULLY distinguished by D_max
+# (20/10/5/2/1 ms, 5 distinct) and by the reward weight α_e (SEVERITY_ALPHA,
+# 0.70→0.05, 5 distinct) — the primary urgency axes. The reliability/freshness
+# columns are coarser ON PURPOSE:
+#   • eps (C2): 3 distinct {1e-3,1e-4,1e-5} = standardized 3GPP reliability
+#     "nines" (99.9 / 99.99 / 99.999 %). 5 distinct values would FABRICATE
+#     non-standard classes (e.g. 99.95 %); 3 tiers is the standards-correct map.
+#   • AoI_max (C4): 4 distinct; saturates at a 0.1 s freshness floor for the two
+#     most-urgent levels (sev4=sev5) — a declared engineering floor.
+#   • eps_aoi (C5): 2 distinct {1e-2 (non-urgent), 1e-3 (all urgent)} — AoI-tail
+#     reliability is effectively non-urgent-vs-urgent; weakest differentiation,
+#     consistent with C5 being 🔴-declared/optionally-demotable (docs/13 §2.2).
+# Decision (2026-06-20): keep the table as-is and document this rationale rather
+# than inventing 5 distinct values per column (which would fabricate standards).
 # Units: seconds
 # ============================================================
-SEVERITY_QOS: Final[dict[int, dict[str, float]]] = {
+SEVERITY_QOS: Final[dict[int, dict[str, Any]]] = {
     # 1 NON_URGENT — stable patient, low immediate risk (loosest)
     1: {
         "name": "NON_URGENT",
@@ -159,32 +188,38 @@ SEVERITY_ALPHA: Final[dict[int, dict[str, float]]] = {
 # Reference: docs/05_agent_workflow.md#cmdp-thresholds
 # Used in: λ_j ← max(0, λ_j + α_λ · (J_Cj − d_j^sev))
 # ============================================================
-# d3_embb_mbps (eMBB throughput floor) is NON-INCREASING in severity (audit
-# 2026-06-16 fix): higher severity → URLLC prioritized → LESS eMBB guaranteed,
-# consistent with SEVERITY_ALPHA["embb"] which also drops (0.70→0.05). The
-# previous increasing table [10,15,20,30,30] pulled AGAINST URLLC priority
-# (reward deprioritized eMBB while C3 demanded MORE eMBB) — a contradiction.
+# d3_embb_mbps (eMBB throughput floor) is a FIXED, severity-INDEPENDENT SLA =
+# 10 Mbps for every severity (formulation-audit Gate 7, 2026-06-20). Rationale:
+# C3 is a MEAN-THROUGHPUT constraint: E[R_eMBB] >= 10 Mbps (NOT a chance
+# constraint). It uses Option-b interval-window subgradient (same as C1/C4).
+# C3 is a clean decoupled eMBB safety floor, NOT coupled to URLLC severity. A
+# fixed LOW floor (10 Mbps) avoids the reward↔C3 contradiction: the reward
+# already deprioritizes eMBB at high severity (SEVERITY_ALPHA["embb"] 0.70→0.05),
+# so a high or severity-keyed floor would fight the reward. 10 Mbps is met with
+# large slack across the whole domain (feasibility oracle: R_eMBB ≥ 97 Mbps even
+# at cell-edge [5,5,5] heavy load), so C3 acts as a genuine starvation safety net
+# rather than a target. (Replaces the prior severity-keyed table 30→10.)
 CMDP_D_J_SEVERITY: Final[dict[int, dict[str, float]]] = {
-    1: {"d1_lat_mean": 20e-3, "d2_lat_tail": 1e-3,  "d3_embb_mbps": 30.0, "d4_aoi_mean": 1.0, "d5_aoi_tail": 1e-2},
-    2: {"d1_lat_mean": 10e-3, "d2_lat_tail": 1e-4,  "d3_embb_mbps": 25.0, "d4_aoi_mean": 0.5, "d5_aoi_tail": 1e-3},
-    3: {"d1_lat_mean": 5e-3,  "d2_lat_tail": 1e-4,  "d3_embb_mbps": 20.0, "d4_aoi_mean": 0.2, "d5_aoi_tail": 1e-3},
-    4: {"d1_lat_mean": 2e-3,  "d2_lat_tail": 1e-5,  "d3_embb_mbps": 15.0, "d4_aoi_mean": 0.1, "d5_aoi_tail": 1e-3},
+    1: {"d1_lat_mean": 20e-3, "d2_lat_tail": 1e-3,  "d3_embb_mbps": 10.0, "d4_aoi_mean": 1.0, "d5_aoi_tail": 1e-2},
+    2: {"d1_lat_mean": 10e-3, "d2_lat_tail": 1e-4,  "d3_embb_mbps": 10.0, "d4_aoi_mean": 0.5, "d5_aoi_tail": 1e-3},
+    3: {"d1_lat_mean": 5e-3,  "d2_lat_tail": 1e-4,  "d3_embb_mbps": 10.0, "d4_aoi_mean": 0.2, "d5_aoi_tail": 1e-3},
+    4: {"d1_lat_mean": 2e-3,  "d2_lat_tail": 1e-5,  "d3_embb_mbps": 10.0, "d4_aoi_mean": 0.1, "d5_aoi_tail": 1e-3},
     5: {"d1_lat_mean": 1e-3,  "d2_lat_tail": 1e-5,  "d3_embb_mbps": 10.0, "d4_aoi_mean": 0.1, "d5_aoi_tail": 1e-3},
 }
 
 # λ_warm table [C1, C2, C3, C4, C5] — per-severity warm-start. Overall λ grows
-# with severity (mean), BUT the C3 slot (index 2, eMBB-floor dual) is
-# NON-INCREASING [0.10→0.02] (audit 2026-06-17): co-directional with the
-# now non-increasing d3_embb floor — at high severity the eMBB floor is low and
-# easily met, so C3 is rarely binding ⟹ lower warm-start dual. (Previously the
-# C3 slot was increasing, matching the old increasing d3_embb — flipped together.)
+# with severity (mean). The C3 slot (index 2, eMBB-floor dual) is now FIXED at
+# 0.02 for every severity (formulation-audit Gate 7, 2026-06-20): the eMBB floor
+# is a severity-independent 10 Mbps that is rarely binding (met with large slack),
+# so a uniform small warm-start dual is consistent. C1/C2/C4/C5 remain
+# severity-increasing (tighter QoS at higher severity).
 # Reference: docs/05_agent_workflow.md:174-180
 LAMBDA_WARM: Final[dict[int, list[float]]] = {
-    1: [0.02, 0.01, 0.10, 0.01, 0.00],   # NON_URGENT  (C3 highest: eMBB floor 30 Mbps)
-    2: [0.15, 0.08, 0.08, 0.05, 0.02],   # SEMI_URGENT
-    3: [0.60, 0.70, 0.05, 0.50, 0.60],   # URGENT
-    4: [1.20, 1.50, 0.03, 1.20, 1.50],   # EMERGENCY
-    5: [1.80, 2.20, 0.02, 1.50, 2.00],   # IMMEDIATE   (C3 lowest: eMBB floor 10 Mbps)
+    1: [0.02, 0.01, 0.02, 0.01, 0.00],   # NON_URGENT  (C3 fixed: eMBB floor 10 Mbps)
+    2: [0.15, 0.08, 0.02, 0.05, 0.02],   # SEMI_URGENT
+    3: [0.60, 0.70, 0.02, 0.50, 0.60],   # URGENT
+    4: [1.20, 1.50, 0.02, 1.20, 1.50],   # EMERGENCY
+    5: [1.80, 2.20, 0.02, 1.50, 2.00],   # IMMEDIATE   (C3 fixed: eMBB floor 10 Mbps)
 }
 
 # ============================================================
@@ -226,36 +261,58 @@ TRAFFIC_CLASSES: Final[dict[str, dict]] = {
 # RL hyperparameters
 # Reference: docs/09_execution_plan.md (Reference Table)
 # ============================================================
-T_MAX_EPISODES: Final[int] = 10000
+T_MAX_EPISODES: Final[int] = 10000      # THEORETICAL cap — actual W10/W11 experiments run 1500 episodes
+                                        # (Phase 3.1 schedule; 10000 is an early-stopping upper bound,
+                                        # not the intended training duration). Set --n-episodes 1500
+                                        # explicitly when reproducing published results.
 STEPS_PER_EPISODE_LOW: Final[int] = 100   # 1 second / T_int=10ms = 100 low-level steps
 PPO_CLIP_EPS: Final[float] = 0.2
 GAMMA: Final[float] = 0.99
 GAE_LAMBDA: Final[float] = 0.95
+
+# Fixed reward scale (replaces adaptive ReturnNormalizer, audit 2026-06-22).
+# The adaptive normalizer accumulated running σ(discounted_return) across ALL
+# severities.  Because sev=1 episodes have 14× larger base reward than sev=5,
+# σ was dominated by sev=1, crushing the sev=5 penalty signal to invisibility
+# (0.000251/step).  A FIXED scale removes this cross-severity contamination:
+# every severity is divided by the SAME constant, preserving relative magnitudes.
+# Value 1.0: per-step r_base ∈ [0.06, 0.84], penalty typically O(0.1) → both
+# remain in a learnable range for the critic without adaptive distortion.
+REWARD_FIXED_SCALE: Final[float] = 1.0
 PPO_K_EPOCHS: Final[int] = 10
 MINIBATCH_SIZE: Final[int] = 64
 
-# Dual ascent for Lagrangian λ (Phase 2.3.3 locked value, 2026-05-20).
-# Hierarchy: α_πH (1e-5) < α_λ (1e-4) < α_πL (1e-3)
+# Dual ascent for Lagrangian λ.
+# Hierarchy (preserved): α_πH (3e-5) < α_λ (2e-4) < α_πL (3e-4)
 # Rationale (two-timescale dual ascent — Spoor 2025 / Ding 2023; HRL timescale Akyıldız 2024):
-#   - α_λ must be slower than α_πL → primal stability
-#   - α_λ = 0.1 × α_πL provides timescale separation while remaining responsive
-#     to constraint violations (faster than Manager policy update)
-# Old value 0.01 (10× too fast vs primal) → corrected to 1e-4.
-ALPHA_LAMBDA_DUAL: Final[float] = 1e-4
+#   - α_λ must be slower than α_πL → primal stability (2e-4 < 3e-4, ~1.5× margin)
+#   - α_λ faster than Manager policy update → responsive to constraint violations
+# History: 0.01 (10× too fast vs primal) → 1e-4 (2026-05-20). The 1e-4 value proved
+#   too SLOW: audit 2026-06-22 found λ_C2 rose only +7%/100ep, so the Manager starved
+#   URLLC (b_rrm 0.37→0.12, sev5 reliability 0.85 vs req 1e-5) to feed eMBB (reward is
+#   eMBB-only; URLLC defended solely by λ). Fixing the Manager critic alone (n_eff=100)
+#   did NOT stop the collapse → dual must enforce faster. → 5e-4 (user-authorized
+#   2026-06-22). A/B showed 5e-4 alone was insufficient (λ pinned to LAMBDA_WARM,
+#   β_ema is the real cross-ep lever) → reverted to 2e-4. Hierarchy preserved:
+#   α_πH (3e-5) < α_λ (2e-4) < α_πL (3e-4).
+ALPHA_LAMBDA_DUAL: Final[float] = 2e-4
 
 # Learning rates per network
-# Borkar 2008 two-timescale alignment: α_πH ≪ α_πL (2 orders of magnitude).
+# Two-timescale alignment (Akyıldız 2024 — Borkar 2008 vắng corpus, không trích như
+# đã có; REFERENCE_MAP.md A2.1): the theorem only justifies the ORDERING/separation
+# α_πH ≪ α_πL, NOT the specific magnitudes. The values below are HEURISTIC + tuned.
 # Old values 1e-4 / 3e-4 had ratio 1/3 ≈ 0.33 → too close; Worker noise leaks
-# into Manager slow update. New 1e-5 / 1e-3 → ratio 0.01 ≪ 1 (heuristic OK).
-# Reference: docs/13_methodology_walkthrough.md Phase 1.4 Borkar correction.
-LR_PI_H: Final[float] = 1e-5            # Manager / rApp (slow)
-LR_V_H: Final[float] = 5e-5             # Manager critic (slow)
-LR_PI_L: Final[float] = 1e-3            # Worker / xApp (fast)
+# into Manager slow update. Current 3e-5 / 3e-4 → ratio 0.1 ≪ 1 (heuristic OK;
+# locked by test_imports::test_rl_hyperparams LR_PI_H/LR_PI_L == 0.1).
+# Reference: docs/13_methodology_walkthrough.md Phase 1.4 two-timescale correction.
+LR_PI_H: Final[float] = 3e-5            # Manager (slow, 100 ms)
+LR_V_H: Final[float] = 1e-4            # Manager critic (slow)
+LR_PI_L: Final[float] = 3e-4        # Worker / xApp (fast)
 LR_V_L: Final[float] = 1e-3             # Worker critic (fast)
 
 # ============================================================
 # Observation layout — SINGLE SOURCE OF TRUTH (obs_dim = OBS_FIXED_BLOCK_LEN
-# + OBS_PER_AMB_BLOCK_LEN·K + F; K=1,F=1 → 31). Every consumer — env._observe(),
+# + OBS_PER_AMB_BLOCK_LEN·K + F; K=1,F=1 → 32). Every consumer — env._observe(),
 # mask_severity(), overlay_lambda_local(), build_manager_state(), docs/07_api_spec
 # — MUST import these constants. Do NOT hardcode the integer indices anywhere.
 # A layout-lock test (tests/test_obs_layout.py) asserts _observe() places each
@@ -271,11 +328,17 @@ LR_V_L: Final[float] = 1e-3             # Worker critic (fast)
 #   6  r_ded_urllc        PRB ratio r_ded^URLLC                       prb_ratios[2]=self.r_ded_urllc
 #   7  arr_urllc          URLLC arrival (Σ over K)/1e3                Σ queues[urllc_k].arrival_rate/1e3
 #   8  arr_emBB           eMBB arrival /1e4                           queues["eMBB"].arrival_rate/1e4
-#   9  bler               mean BLER                                   float(self.last_bler)
+#   9  bler               cell-average BLER via logistic(mean SINR_k   float(self.last_bler)
+#                         across K ambulances) — NOT per-UE BLER; a
+#                         single scalar representing the scheduler's
+#                         aggregate link quality estimate.
 #   10:15 severity_oh[5]  severity_ref one-hot (lvl 1..5)             sev_oh[self.severity-1]=1
 #   15 lambda_c3_shared   λ_local shared C3 (eMBB-floor dual)         self._lambda_local[4K]
 #   16 r_min_urllc_anchor Manager setpoint anchor (FIXED/window)      self.r_min_urllc_anchor
-#   17 n_bys              bystander UE count / M_eMBB                 bystander.active_ue_count/M_eMBB
+#   17 n_bys              active bystander eMBB UE count normalized    bystander.active_ue_count/M_eMBB
+#                         by M_eMBB (baseline eMBB UE population).
+#                         = 1.0 when bystander is disabled (baseline
+#                         load). > 1.0 during S2B spike events.
 #   18 aoi_mean           mean AoI over K (s)                         aoi_per_amb.mean()
 #   19 aoi_max            max AoI over K (s)                          aoi_per_amb.max()
 # ============================================================
@@ -297,16 +360,20 @@ OBS_N_BYS_IDX: Final[int] = 17
 OBS_AOI_MEAN_IDX: Final[int] = 18
 OBS_AOI_MAX_IDX: Final[int] = 19
 OBS_FIXED_BLOCK_LEN: Final[int] = 20       # fixed block obs[0:20]
-OBS_PER_AMB_BLOCK_LEN: Final[int] = 10     # per-ambulance block, 10 dims/amb
+OBS_PER_AMB_BLOCK_LEN: Final[int] = 11     # per-ambulance block, 11 dims/amb (+active_mask_k)
 
 # Backward-compat aliases (existing importers reference these names)
 SEVERITY_OH_OBS_INDEX: Final[int] = OBS_SEVERITY_OH_IDX        # severity_ref one-hot at obs[10:15]
 SEVERITY_OH_LEN: Final[int] = OBS_SEVERITY_OH_LEN
 LAMBDA_C3_SHARED_OBS_INDEX: Final[int] = OBS_LAMBDA_C3_IDX     # shared C3 λ_local at obs[15]
 
-# Per-ambulance block offsets (relative to OBS_FIXED_BLOCK_LEN + 10*k):
+# Per-ambulance block offsets (relative to OBS_FIXED_BLOCK_LEN + OBS_PER_AMB_BLOCK_LEN*k):
 #   SINR_k, d_k, v_k, delay_norm_k, AoI_norm_k, severity_k_norm,
-#   λC1_k, λC2_k, λC4_k, λC5_k
+#   λC1_k, λC2_k, λC4_k, λC5_k, active_mask_k
+# active_mask_k ∈ {0,1} (2026-06-23): EXPLICIT active flag = entered_k & ~arrived_k.
+# Disambiguates an inactive vehicle (all-zero block) from an ACTIVE one that
+# merely has empty queue / low delay / low AoI — the zero-sentinel alone is
+# ambiguous (severity_norm=0 only implicitly hinted it). 1=active, 0=inactive.
 AMB_SINR_OFFSET: Final[int] = 0
 AMB_DIST_OFFSET: Final[int] = 1
 AMB_SPEED_OFFSET: Final[int] = 2
@@ -317,28 +384,30 @@ AMB_LAMBDA_C1_OFFSET: Final[int] = 6
 AMB_LAMBDA_C2_OFFSET: Final[int] = 7
 AMB_LAMBDA_C4_OFFSET: Final[int] = 8
 AMB_LAMBDA_C5_OFFSET: Final[int] = 9
+AMB_ACTIVE_OFFSET: Final[int] = 10
 
 # ============================================================
-# B5: severity_k priority temperature (β) + intra-slice Π_feasible PRB split
-# (per-ambulance severity epic, 2026-06-15). β is Worker action a[6] (K≥2 only):
-#   beta = BETA_MIN + (BETA_MAX - BETA_MIN) * sigmoid(a[6])
-# Intra-slice split: b = max(floor(κ·B_U/K), PRB_MIN_QOS), feasibility fallback
-# b = B_U // K if K·b > B_U; remainder S = B_U - K·b distributed via
-# w = softmax(β·(severity_per_amb/5) + δ·ũ), δ = ρ·β. Severity is NORMALIZED
-# (÷5, same as obs severity_k_norm) so β is a pure GLOBAL GAIN on unit-scale
-# priority. At K=1, softmax([x]) = [1.0] always ⟹ PRB_0 = B_U regardless of
-# parameters (exact K=1 preservation).
+# B5: per-vehicle priority logits + pure-RL intra-slice split
+# (per-ambulance severity epic, 2026-06-15; per-vehicle action dims 2026-06-19;
+#  β slot removed → pure logits 2026-06-21).
+# Worker action (K≥2): a[0:K] = per-vehicle priority logits ℓ_k (no β slot).
+# Pure-RL intra-slice allocation:
+#   severity_k → obs_k → neural policy → ℓ_k → softmax → w_k → PRB_k
+# No hard-coded severity ordering, no N_req formula, no dual urgency, no β.
+# RL learns severity-aware allocation through:
+#   - obs includes severity_k_norm (policy sees severity directly)
+#   - r_aug = r - λ^T·(c-d) penalizes violations via Lagrangian
+#   - PPO/TD3/SAC gradient teaches policy to output higher ℓ_k where needed
 # ============================================================
-# BETA_MIN > 0 (main method, audit 2026-06-16): guarantees a MINIMUM severity
-# ordering in the PRB split — the agent cannot learn β→0 to flatten priority
-# (severity-aware prioritization is a core contribution, not optional). At
-# BETA_MIN=0.5 with normalized severity (spread 0.8) the sev5:sev1 weight ratio
-# floor ≈ exp(0.5·0.8) ≈ 1.49×; at BETA_MAX=5 it reaches ≈ exp(4) ≈ 55×.
+# BETA_MIN/MAX retained ONLY for legacy import/test compat (env._beta is held
+# at BETA_MIN and never read by the allocation — pure-RL has no β term).
 BETA_MIN: Final[float] = 0.5
 BETA_MAX: Final[float] = 5.0
-INTRA_SLICE_KAPPA: Final[float] = 0.5      # floor fraction: b = floor(κ·B_U/K)
-PRB_MIN_QOS: Final[int] = 1                # minimum PRB floor per ambulance
-RHO_URGENCY_TIEBREAK: Final[float] = 0.15  # δ = ρ·β; severity term (β·0.8) dominates tiebreaker (β·0.15)
+PRB_MIN_QOS: Final[int] = 1                # anti-starvation floor per active ambulance
+URLLC_OFFERED_LOAD_BPS: Final[int] = 160_000   # 50 pkt/s × 400 B mean × 8 = 160 kbps per ambulance
+URLLC_PKT_BITS: Final[int] = 3_200             # mean packet size in bits (400 B × 8); M/M/1 service-time param
+INTRA_SLICE_KAPPA: Final[float] = 0.5      # legacy constant (kept for backward compat; unused in current split)
+RHO_URGENCY_TIEBREAK: Final[float] = 0.15  # legacy constant (kept for backward compat; unused in current split)
 
 # ============================================================
 # Phase 2.1 reward normalization (docs/13 Phase 2.1, post-restructure 2026-05-26)
@@ -350,11 +419,13 @@ RHO_URGENCY_TIEBREAK: Final[float] = 0.15  # δ = ρ·β; severity term (β·0.8
 #  URLLC with λ_1, λ_2 → dual stagnation. See docs/13 §2.1 restructure note.)
 # ============================================================
 D_REF_URLLC: Final[float] = 1e-3        # 1 ms = tightest D_max (severity 5 IMMEDIATE)
-R_REF_EMBB_MBPS: Final[float] = 100.0   # eMBB log-utility normalization anchor (worst-case φ_3 capacity).
+R_REF_EMBB_MBPS: Final[float] = 100.0   # eMBB log-utility normalization anchor (worst-case severity-5 capacity).
                                         # ASSUMPTION: 100 Mbps is engineering estimate for available eMBB
                                         # throughput after URLLC slice reservation. docs/13:671 justifies
-                                        # as "eMBB cap at worst-case φ_3". Sensitivity sweep {50,100,200,300}
-                                        # scheduled in REFERENCE_MAP §5.
+                                        # as "eMBB cap at worst-case severity-5".
+                                        # PLANNED sensitivity sweep {50,100,200,300} Mbps — NOT yet run;
+                                        # scheduled in REFERENCE_MAP §5. Do NOT cite these values as
+                                        # validated results until the sweep is executed.
 # AoI dual-gradient normalization scale (NOT a constraint threshold — the AoI
 # budgets live in SEVERITY_QOS["AoI_max"] / CMDP_D_J_SEVERITY["d4_aoi_mean"]).
 # Mirrors D_REF_URLLC: 0.1 s = tightest AoI_max (severity 5 IMMEDIATE). Used ONLY
@@ -372,25 +443,23 @@ AOI_REF_S: Final[float] = 0.1
 # See docs/13 §2.3.3 + agents/lagrangian.py:191.
 LAMBDA_MAX: Final[float] = 10.0
 
-# Hierarchical time scales (corrected 2026-05-20 to comply with O-RAN spec)
+# Hierarchical time scales — single real-time clock, NO time compression.
+# sim_time advances by one MAC tick each O-DU step; every physical quantity
+# (channel, queue, delay, AoI, mobility) evolves in real time. The two control
+# layers act at coarser cadences, but no wall-clock is compressed or rescaled.
 #
-#   Real deployment (O-RAN.WG3 Near-RT RIC + O-RAN.WG2 Non-RT RIC):
-#     MAC TTI       = 0.5 ms (3GPP TS 38.211 μ=1, O-DU internal)
-#     Worker (xApp) = 10 ms (1 RRMPolicyRatio update per 10 ms)
-#     Manager (rApp)= 1 s (policy + Lagrangian dual update)
+#   MAC TTI       = 0.5 ms   (3GPP TS 38.211 μ=1, O-DU internal scheduler)
+#   Worker step   = 10 ms    (= 20 MAC ticks; intra-slice control)
+#   Manager step  = 100 ms   (= 10 Worker steps; inter-slice RRMPolicyRatio)
+#   Episode (max) = 400 s    (EnvConfig.episode_duration_sec; ends early on all-arrived)
 #
-#   Simulation (Hướng B — compressed Manager 10× for tractable training):
-#     MAC TTI       = 0.5 ms (unchanged)
-#     Worker (xApp) = 10 ms (= 20 MAC ticks, unchanged from real)
-#     Manager (rApp)= 100 ms sim (= 10 Worker steps; 1 s real)
-#
-#   Borkar 2008 two-timescale theorem applies: α_πH ≪ α_πL preserved
-#   regardless of T_H / T_L ratio. Compression is conservative direction.
+#   Two-timescale stochastic-approximation (Akyıldız 2024; Borkar 2008 vắng corpus):
+#   convergence is driven by the learning-rate separation α_πH ≪ α_πL
+#   (LR_PI_H ≪ LR_PI_L), independent of the T_H / T_L ratio.
 
 T_TTI_SEC: Final[float] = 0.5e-3            # MAC tick (3GPP TS 38.211)
-T_L_SEC: Final[float] = 10e-3               # Worker/xApp step (O-RAN Near-RT RIC)
-T_H_SEC: Final[float] = 100e-3              # Manager/rApp step (sim — compressed)
-T_H_REAL_SEC: Final[float] = 1.0            # Manager/rApp step (real deployment)
+T_L_SEC: Final[float] = 10e-3               # Worker step (= 20 MAC ticks)
+T_H_SEC: Final[float] = 100e-3              # Manager step (= 10 Worker steps)
 
 # Derived ratios
 MAC_TICKS_PER_WORKER: Final[int] = 20       # T_L / T_TTI = 10 ms / 0.5 ms
@@ -402,16 +471,25 @@ GAMMA_WORKER: Final[float] = GAMMA                                # = 0.99 per W
 GAMMA_MANAGER: Final[float] = GAMMA ** WORKER_STEPS_PER_MANAGER   # = 0.99^10 ≈ 0.904 per Manager step
 
 # Manager PRB-budget bounds — outer [B_RRM_MIN, B_RRM_MAX] from decode_manager_action;
-# set_rrm_budget() further clips to [feasible_rrm_floor, feasible_rrm_cap] at runtime.
-B_RRM_MIN: Final[float] = 0.05   # lower bound: avoids URLLC starvation
+# set_rrm_budget() further clips to [B_RRM_FLOOR_BY_SEV[sev], feasible_rrm_cap].
+#
+# Design constraint (user-mandated, 2026-06-22): xe cứu thương LUÔN ưu tiên hơn eMBB
+# ở MỌI severity. Bệnh nhân luôn trên xe (còi hú bật) → URLLC > 50% PRB luôn.
+# Floor tăng monotonic theo severity: ambulance ở sev thấp vẫn ưu tiên, sev cao
+# càng ưu tiên hơn. RL fine-tunes trong khoảng [floor, B_RRM_MAX].
+B_RRM_FLOOR_BY_SEV: Final[dict[int, float]] = {
+    1: 0.65,   # NON_URGENT:  URLLC ≥ 65%  (range [0.65, 0.85] = 20% room)
+    2: 0.70,   # SEMI_URGENT: URLLC ≥ 70%  (range [0.70, 0.85] = 15% room)
+    3: 0.75,   # URGENT:      URLLC ≥ 75%  (range [0.75, 0.85] = 10% room)
+    4: 0.80,   # EMERGENCY:   URLLC ≥ 80%  (range [0.80, 0.85] =  5% room)
+    5: 0.85,   # IMMEDIATE:   URLLC ≥ 85%  (range [0.85, 0.85] =  0% fixed)
+}
+B_RRM_MIN: Final[float] = 0.65   # global floor = min(B_RRM_FLOOR_BY_SEV) → URLLC always > eMBB
 B_RRM_MAX: Final[float] = 0.85   # upper bound: leaves ≥15% PRBs for eMBB
 
 # Legacy aliases (DO NOT use in new code — kept for backward compat in tests)
-T_H_REAL: Final[float] = T_H_REAL_SEC       # was 1.0
-T_H_SIM: Final[float] = T_H_SEC             # was 10e-3 — now 100e-3 (semantic fix)
-T_L_SIM: Final[float] = T_L_SEC             # Worker/xApp step = 10 ms (FIXED 2026-06-16: was
-                                            # aliased to T_TTI_SEC=0.5ms — a 20× semantic bug;
-                                            # T_L is 20 MAC ticks, not one. Unused, fixed defensively.)
+T_H_SIM: Final[float] = T_H_SEC             # Manager step = 100 ms (alias of T_H_SEC)
+T_L_SIM: Final[float] = T_L_SEC             # Worker step = 10 ms (alias of T_L_SEC)
 
 # RESERVED — learnable xApp decision interval T_int ∈ [10,100] ms. UNUSED and
 # CONFLICTS with the current FIXED two-timescale design (T_L=10ms, T_H=100ms,
@@ -422,7 +500,7 @@ T_INT_RANGE: Final[tuple[float, float]] = (10e-3, 100e-3)
 
 # ============================================================
 # RESERVED — multi-cell handover + pre-tightening (OUT OF SINGLE-CELL SCOPE,
-# NOT WIRED). The env is single-cell UMi (R_CELL_M=300, no handover); the
+# NOT WIRED). The env is single-cell UMa (R_CELL_M=1000, no handover); the
 # constants below are unused by env/agents. PRE_TIGHTEN_ETA additionally
 # references "φ_next" (the removed 5-phase FSM — phase→severity swap 2026-06-14),
 # so it is doubly stale: severity is fixed per episode, there is no next phase to
@@ -507,8 +585,9 @@ def build_lambda_warm_vector(severity_per_amb: Sequence[int], severity_ref: int)
     this is the permutation [0,1,3,4,2] of ``LAMBDA_WARM[sev]`` — exact match
     to the legacy reset_episode() warm-start.
 
-    Note: the C3 slot (LAMBDA_WARM[sev][2]) is NON-INCREASING in severity,
-    co-directional with the non-increasing d3_embb floor (audit 2026-06-17).
+    Note: the C3 slot (LAMBDA_WARM[sev][2]) is FIXED at 0.02 for every severity,
+    co-directional with the fixed (severity-independent) 10 Mbps d3_embb floor
+    (formulation-audit Gate 7, 2026-06-20).
     """
     if len(severity_per_amb) < 1:
         raise ValueError("severity_per_amb must have >= 1 entry (K >= 1)")

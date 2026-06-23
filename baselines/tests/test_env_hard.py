@@ -15,32 +15,37 @@ import pytest
 
 
 def _zero_action():
-    return np.zeros(6, dtype=np.float32)
+    return np.zeros(1, dtype=np.float32)
 
 
 # ============================================================
-# Severity (fixed per episode — phase trajectory removed 2026-06-14)
+# Severity (sampled once per episode at reset, constant within episode)
 # ============================================================
+
+_VALID_SEVERITIES = {1, 2, 3, 4, 5}
+_SEVERITY_NAMES = {"MINOR", "SEMI_URGENT", "URGENT", "CRITICAL", "IMMEDIATE"}
 
 
 class TestSeverityFixed:
-    def test_initial_severity_respected(self):
+    def test_severity_is_valid_after_reset(self):
         from env.oran_env import EnvConfig, ORANEnv
 
-        env = ORANEnv(config=EnvConfig(initial_severity=3), seed=0)
+        env = ORANEnv(config=EnvConfig(), seed=0)
         _, info = env.reset(seed=0)
-        assert info["severity"] == 3
-        assert info["severity_name"] == "URGENT"
+        assert info["severity"] in _VALID_SEVERITIES
+        assert info["severity_name"] in _SEVERITY_NAMES
 
-    def test_severity_constant_across_episode(self):
+    def test_severity_constant_within_episode(self):
+        """Severity is sampled once at reset and MUST NOT change mid-episode."""
         from env.oran_env import EnvConfig, ORANEnv
 
-        env = ORANEnv(config=EnvConfig(initial_severity=5), seed=0)
-        env.reset(seed=0)
+        env = ORANEnv(config=EnvConfig(), seed=0)
+        _, reset_info = env.reset(seed=0)
+        severity_at_reset = reset_info["severity"]
         a = _zero_action()
         for _ in range(50):
             _, _, _, _, info = env.step(a)
-            assert info["severity"] == 5   # never changes mid-episode
+            assert info["severity"] == severity_at_reset   # never changes mid-episode
 
 
 # ============================================================
@@ -157,9 +162,9 @@ class TestChannelKnobs:
     def test_lower_tx_power_lowers_sinr(self):
         from env.oran_env import EnvConfig, ORANEnv
 
-        e_hi = ORANEnv(config=EnvConfig(bs_tx_power_dbm=46.0,
+        e_hi = ORANEnv(config=EnvConfig(bs_tx_power_total_dbm=46.0,
                                          ambulance_start_distance_m=150.0), seed=0)
-        e_lo = ORANEnv(config=EnvConfig(bs_tx_power_dbm=30.0,
+        e_lo = ORANEnv(config=EnvConfig(bs_tx_power_total_dbm=30.0,
                                          ambulance_start_distance_m=150.0), seed=0)
         e_hi.reset(seed=0)
         e_lo.reset(seed=0)
@@ -168,13 +173,9 @@ class TestChannelKnobs:
             e_lo.step(_zero_action())
         assert float(np.mean(e_hi.last_sinr_db)) > float(np.mean(e_lo.last_sinr_db))
 
-    def test_ambulance_start_distance_respected(self):
-        from env.oran_env import EnvConfig, ORANEnv
-
-        env = ORANEnv(config=EnvConfig(ambulance_start_distance_m=100.0), seed=42)
-        env.reset(seed=42)
-        r = float(np.hypot(env.ambulance_pos[0, 0], env.ambulance_pos[0, 1]))
-        assert r == pytest.approx(100.0, abs=1e-3)
+    # test_ambulance_start_distance_respected removed: RWP-only (ambulance_start_distance_m
+    # placed vehicles at a fixed radius). The env now always uses SUMO+OSM mobility, so
+    # start positions come from the FCD trace — this RWP knob no longer applies.
 
 
 # ============================================================
@@ -188,13 +189,14 @@ class TestHardMissionConfig:
         env = ORANEnv(config=hard_mission_config(), seed=0)
         _, info = env.reset(seed=0)
         assert env.bystander is not None
-        assert info["severity"] == 5            # hard mission = IMMEDIATE
+        assert info["severity"] in _VALID_SEVERITIES
 
     def test_full_episode_no_crash(self):
         from env.oran_env import hard_mission_config, ORANEnv
 
         env = ORANEnv(config=hard_mission_config(), seed=42)
-        env.reset(seed=42)
+        _, reset_info = env.reset(seed=42)
+        severity_at_reset = reset_info["severity"]
         a = _zero_action()
         # Step through entire 1s episode
         steps = 0
@@ -204,8 +206,8 @@ class TestHardMissionConfig:
             _, _, _, truncated, info = env.step(a)
             steps += 1
         assert truncated
-        # Severity stays IMMEDIATE for the whole episode (fixed exogenous)
-        assert info["severity"] == 5
+        # Severity sampled once at reset — must stay constant for whole episode
+        assert info["severity"] == severity_at_reset
 
     def test_burst_creates_violations_for_static_policy(self):
         """Static (zero-action) policy under hard mission should violate sometimes."""
@@ -218,7 +220,7 @@ class TestHardMissionConfig:
         while not truncated:
             _, _, _, truncated, _ = env.step(a)
         # Hard mission is hard enough that a zero-action Static policy hits
-        # > 1ms (φ₃ target) on SOME TTI. We don't pin a specific rate to keep
+        # > 1ms (severity-5 target) on SOME TTI. We don't pin a specific rate to keep
         # the test resilient to sampling variance — just check the regime
         # changed from the easy env (where viol was strictly 0).
         viol = env.episode_violation_rate()

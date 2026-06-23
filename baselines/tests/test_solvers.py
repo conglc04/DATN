@@ -131,18 +131,15 @@ class TestPhaseMask:
 
 
 # ============================================================
-# Baselines — smoke instantiation
+# Ablation variants — smoke instantiation
 # ============================================================
 
 
 @pytest.mark.parametrize(
     "module_path,cls_name",
     [
-        ("solvers.static_slicing",    "StaticSlicingBaseline"),
-        ("solvers.b2_hrl_ppo_soft",   "B2HRLPPOSoftBaseline"),
-        ("solvers.sac",           "SACBaseline"),
+        ("solvers.sac",           "SACSolver"),
         ("solvers.pa_ppo_soft",       "PAPPOSoftBaseline"),
-        ("solvers.no_phase_ppo", "NoPhasePPOBaseline"),
         ("solvers.ppo_cmdp_flat",     "PPOCMDPFlatBaseline"),
     ],
 )
@@ -168,15 +165,6 @@ class TestBaselineSmokeAPI:
 
 
 class TestPhaseFlagSemantics:
-    def test_b2_masks_phase(self):
-        from solvers.b2_hrl_ppo_soft import B2HRLPPOSoftBaseline
-        agent = B2HRLPPOSoftBaseline(state_dim=28, action_dim=6, seed=0)
-        obs = np.arange(28, dtype=np.float32)
-        masked = agent.maybe_mask(obs)
-        # Phase block should be zero
-        from solvers._common import SEVERITY_OH_START_INDEX, SEVERITY_OH_LEN
-        assert np.all(masked[SEVERITY_OH_START_INDEX : SEVERITY_OH_START_INDEX + SEVERITY_OH_LEN] == 0)
-
     def test_pa_ppo_soft_keeps_phase(self):
         from solvers.pa_ppo_soft import PAPPOSoftBaseline
         agent = PAPPOSoftBaseline(state_dim=28, action_dim=6, seed=0)
@@ -187,8 +175,8 @@ class TestPhaseFlagSemantics:
     def test_sac_has_5dim_lambda(self):
         """SAC (B7): 5-dim λ via LambdaState (Phase 3 sibling solver to
         PPO + TD3, applied AFTER Phase 2 statement complete)."""
-        from solvers.sac import SACBaseline
-        agent = SACBaseline(state_dim=40, action_dim=6, seed=0)
+        from solvers.sac import SACSolver
+        agent = SACSolver(state_dim=40, action_dim=6, seed=0)
         assert agent.lambda_state.n_constraints == 5
         # Old 2-dim API removed
         assert not hasattr(agent, "lagrangian")
@@ -196,21 +184,12 @@ class TestPhaseFlagSemantics:
     def test_sac_keeps_phase(self):
         # SAC is a phase-AWARE equal sibling: maybe_mask must keep the phase
         # one-hot intact (same as PPO / TD3). Regression guard for fairness.
-        from solvers.sac import SACBaseline
-        agent = SACBaseline(state_dim=40, action_dim=6, seed=0)
+        from solvers.sac import SACSolver
+        agent = SACSolver(state_dim=40, action_dim=6, seed=0)
         assert agent.flags.use_phase is True
         obs = np.arange(40, dtype=np.float32)
         np.testing.assert_array_equal(agent.maybe_mask(obs), obs)
 
-    def test_no_phase_has_5dim_lambda(self):
-        from solvers.no_phase_ppo import NoPhasePPOBaseline
-        agent = NoPhasePPOBaseline(state_dim=28, action_dim=6, seed=0)
-        assert agent.lagrangian.n == 5
-
-    def test_static_has_no_lambda(self):
-        from solvers.static_slicing import StaticSlicingBaseline
-        agent = StaticSlicingBaseline(state_dim=28, action_dim=6, seed=0)
-        assert not hasattr(agent, "lagrangian")
 
 
 # ============================================================
@@ -222,7 +201,7 @@ class TestSmokeTrainOneEpisode:
     """Gate P3 prep: each main baseline runs 1 episode without crash."""
 
     def _run_one(self, baseline_name):
-        from solvers.smoke_train import train
+        from solvers.train_offpolicy import train
         stats = train(
             baseline_name=baseline_name,
             n_episodes=1,

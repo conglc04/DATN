@@ -34,6 +34,21 @@ from utils.config import (
 
 
 # ----------------------------------------------------------------------------
+# Test helpers
+# ----------------------------------------------------------------------------
+
+
+def _force_severity(env: ORANEnv, sev: int) -> None:
+    """Pin env severity state after reset (white-box unit test — does NOT use sample_severity=False).
+
+    sample_severity=True is a project requirement; formula-testing unit tests must set
+    severity directly on the live env object instead of relying on the config field.
+    """
+    env.severity = sev
+    env.severity_per_amb = np.full(env.config.K_ambulances, sev, dtype=int)
+
+
+# ----------------------------------------------------------------------------
 # Config helpers (Phase 1.3 Master Table)
 # ----------------------------------------------------------------------------
 
@@ -55,9 +70,9 @@ def test_gamma_hierarchy():
 def test_three_rate_hierarchy_locked():
     """alpha_pi_H < alpha_lambda < alpha_pi_L (Phase 2.3.4 three-rate hierarchy)."""
     assert cfg.LR_PI_H < cfg.ALPHA_LAMBDA_DUAL < cfg.LR_PI_L
-    assert cfg.LR_PI_H == 1e-5
-    assert cfg.ALPHA_LAMBDA_DUAL == 1e-4
-    assert cfg.LR_PI_L == 1e-3
+    assert cfg.LR_PI_H == 3e-5
+    assert cfg.ALPHA_LAMBDA_DUAL == 2e-4
+    assert cfg.LR_PI_L == 3e-4
 
 
 def test_get_severity_thresholds_immediate():
@@ -108,15 +123,15 @@ def test_get_severity_alpha_immediate_urllc_priority():
 # ----------------------------------------------------------------------------
 
 
-def test_observation_dim_31_with_K1_F1():
-    """Formal spec: |s_t^L| = 20 + 10K + F = 20 + 10 + 1 = 31 for K=1, F=1
+def test_observation_dim_32_with_K1_F1():
+    """Formal spec: |s_t^L| = 20 + 11K + F = 20 + 11 + 1 = 32 for K=1, F=1
     (per-ambulance severity_k epic 2026-06-15: fixed 20-dim block +
-    10-dim interleaved per-ambulance block [SINR,d,v,delay_norm,AoI_norm,
-    severity_norm,lambda_C1,lambda_C2,lambda_C4,lambda_C5] + F-dim mean-AoI tail)."""
+    11-dim interleaved per-ambulance block [SINR,d,v,delay_norm,AoI_norm,
+    severity_norm,lambda_C1,lambda_C2,lambda_C4,lambda_C5,active_mask] + F-dim mean-AoI tail)."""
     env = ORANEnv(config=EnvConfig(K_ambulances=1, num_streams=1), seed=0)
     obs, _ = env.reset(seed=0)
-    assert obs.shape == (31,), f"Expected (31,), got {obs.shape}"
-    assert env.observation_space.shape == (31,)
+    assert obs.shape == (32,), f"Expected (32,), got {obs.shape}"
+    assert env.observation_space.shape == (32,)
 
 
 def test_observation_finite_no_nan():
@@ -131,19 +146,20 @@ def test_observation_finite_no_nan():
 
 def test_observation_layout_severity_one_hot():
     """Severity one-hot is at indices [10:15] of the fixed block."""
-    env = ORANEnv(config=EnvConfig(initial_severity=3), seed=0)
-    obs, _ = env.reset(seed=0)
+    env = ORANEnv(config=EnvConfig(), seed=0)
+    obs, info = env.reset(seed=0)
     sev_oh = obs[10:15]
     assert sev_oh.sum() == 1.0
-    assert sev_oh[2] == 1.0  # severity 3 (1-indexed) → position 2
+    sev = info["severity"]          # sampled severity (1-indexed)
+    assert sev_oh[sev - 1] == 1.0  # one-hot at position (severity - 1)
 
 
-def test_observation_dim_51_with_K3_F1():
-    """K=3, F=1: |s_t^L| = 20 + 10K + F = 20 + 30 + 1 = 51."""
+def test_observation_dim_54_with_K3_F1():
+    """K=3, F=1: |s_t^L| = 20 + 11K + F = 20 + 33 + 1 = 54."""
     env = ORANEnv(config=EnvConfig(K_ambulances=3, num_streams=1), seed=0)
     obs, _ = env.reset(seed=0)
-    assert obs.shape == (51,), f"Expected (51,), got {obs.shape}"
-    assert env.observation_space.shape == (51,)
+    assert obs.shape == (54,), f"Expected (54,), got {obs.shape}"
+    assert env.observation_space.shape == (54,)
 
 
 def test_per_ambulance_delay_norm_differs_under_unequal_sinr():
@@ -171,7 +187,7 @@ def test_per_ambulance_delay_norm_differs_under_unequal_sinr():
     for _ in range(5):
         obs, _, _, _, info = env.step(env.action_space.sample())
 
-    assert obs.shape == (51,)
+    assert obs.shape == (54,)
     assert np.all(np.isfinite(obs))
     c_vec = info["c_vec"]
     assert c_vec.shape == (4 * K + 1,)
@@ -305,8 +321,9 @@ def test_info_d_phi_matches_master_table_immediate():
 
     (4K+1)-dim layout [d1_C1, d2_C2, d4_C4, d5_C5, d3_C3_shared] (K=1) — the
     permutation [0,1,3,4,2] of the legacy [d1,d2,d3,d4,d5] order."""
-    env = ORANEnv(config=EnvConfig(initial_severity=5), seed=0)
+    env = ORANEnv(config=EnvConfig(), seed=0)
     env.reset(seed=0)
+    _force_severity(env, 5)       # pin severity for formula unit test
     _, _, _, _, info = env.step(env.action_space.sample())
     d_phi = info["d_phi"]
     expected = [1e-3, 1e-5, 0.1, 1e-3, 0.0]  # d1,d2,d4,d5,d3 at severity 5
@@ -318,12 +335,14 @@ def test_info_d_phi_matches_master_table_immediate():
 
 def test_info_d_phi_changes_with_severity():
     """d_phi[0] (D_max) differs across severity (1ms@IMMEDIATE vs 20ms@NON_URGENT)."""
-    env5 = ORANEnv(config=EnvConfig(initial_severity=5), seed=0)
+    env5 = ORANEnv(config=EnvConfig(), seed=0)
     env5.reset(seed=0)
+    _force_severity(env5, 5)      # pin severity for formula unit test
     _, _, _, _, info5 = env5.step(env5.action_space.sample())
 
-    env1 = ORANEnv(config=EnvConfig(initial_severity=1), seed=0)
+    env1 = ORANEnv(config=EnvConfig(), seed=0)
     env1.reset(seed=0)
+    _force_severity(env1, 1)      # pin severity for formula unit test
     _, _, _, _, info1 = env1.step(env1.action_space.sample())
 
     assert info5["d_phi"][0] == 1e-3
@@ -361,9 +380,11 @@ def test_c_vec_c2_c5_indicator_in_unit_interval():
 
 
 def test_info_exports_severity():
-    """info exports the exogenous severity (1..5) + its name (phase→severity swap)."""
-    env = ORANEnv(config=EnvConfig(initial_severity=4), seed=0)
-    env.reset(seed=0)
+    """info exports the exogenous severity (1..5) and its correct name."""
+    from utils.config import SEVERITY_QOS
+    env = ORANEnv(config=EnvConfig(), seed=0)
+    _, reset_info = env.reset(seed=0)
     _, _, _, _, info = env.step(env.action_space.sample())
-    assert info["severity"] == 4
-    assert info["severity_name"] == "EMERGENCY"
+    assert info["severity"] in SEVERITY_QOS               # valid severity level
+    assert info["severity"] == reset_info["severity"]     # consistent within episode
+    assert info["severity_name"] == SEVERITY_QOS[info["severity"]]["name"]

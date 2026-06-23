@@ -143,10 +143,10 @@ def test_decode_manager_action_bounds():
 
 
 def test_worker_actor_forward_dims():
-    actor = WorkerActor(state_dim=40, action_dim=6)
+    actor = WorkerActor(state_dim=40, action_dim=4)
     obs = torch.zeros(3, 40)
     dist = actor(obs)
-    assert dist.mean.shape == (3, 6)
+    assert dist.mean.shape == (3, 4)
 
 
 def test_worker_critic_forward_dims():
@@ -167,34 +167,39 @@ def test_worker_act_returns_correct_shapes():
     assert a.shape == (WORKER_ACTION_DIM_DEFAULT,)
 
 
-def test_decode_worker_action_delta_bounds():
-    """Δr_min, Δr_max ∈ [-0.1, +0.1] (Phase 2.3.2 locked)."""
-    tol = 1e-6  # float32 tanh saturation rounding
-    for raw_val in [-10.0, -1.0, 0.0, 1.0, 10.0]:
-        dec = decode_worker_action(np.array([raw_val, raw_val, 0, 0, 0, 0], dtype=np.float32))
-        assert -0.1 - tol <= dec["delta_r_min"] <= 0.1 + tol
-        assert -0.1 - tol <= dec["delta_r_max"] <= 0.1 + tol
+def test_decode_worker_action_no_beta_field():
+    """Pure-RL layout: no β field exists (allocation has no temperature term)."""
+    dec = decode_worker_action(np.array([1.0, 2.0, 3.0], dtype=np.float32))
+    assert "beta" not in dec
 
 
-def test_decode_worker_action_r_ded_ratio_bounds():
-    """r_ded_ratio ∈ [0, 1]."""
-    for raw_val in [-10.0, 0.0, 10.0]:
-        dec = decode_worker_action(np.array([0, 0, raw_val, 0, 0, 0], dtype=np.float32))
-        assert 0.0 <= dec["r_ded_ratio"] <= 1.0
+def test_decode_worker_action_k1_noop_full_weight():
+    """K=1 no-op: single ambulance gets full budget (weight [1.0])."""
+    dec = decode_worker_action(np.array([0.0], dtype=np.float32))
+    assert dec["prb_logits"].shape == (1,)
+    assert dec["prb_weights"].shape == (1,)
+    assert float(dec["prb_weights"][0]) == pytest.approx(1.0)
 
 
-def test_decode_worker_action_w_intra_simplex():
-    """w_intra^C1..C3 ∈ Δ³ simplex (sum=1, non-negative)."""
-    dec = decode_worker_action(np.array([0, 0, 0, 1.0, 2.0, 3.0], dtype=np.float32))
-    w = dec["w_intra"]
+def test_decode_worker_action_prb_weights_simplex():
+    """Per-ambulance PRB weights form a simplex for K>=2 (K logits, no β prefix)."""
+    dec = decode_worker_action(np.array([1.0, 2.0, 3.0], dtype=np.float32))  # K=3
+    w = dec["prb_weights"]
     assert w.shape == (3,)
     assert (w >= 0).all()
     assert abs(float(w.sum()) - 1.0) < 1e-5
 
 
-def test_decode_worker_action_rejects_wrong_shape():
+def test_decode_worker_action_k2_is_valid():
+    """K=2: shape (2,) is now VALID (2 per-vehicle logits, no β slot)."""
+    dec = decode_worker_action(np.array([1.0, -1.0], dtype=np.float32))
+    assert dec["prb_weights"].shape == (2,)
+    assert dec["prb_weights"][0] > dec["prb_weights"][1]
+
+
+def test_decode_worker_action_rejects_empty():
     with pytest.raises(ValueError):
-        decode_worker_action(np.zeros(5, dtype=np.float32))
+        decode_worker_action(np.zeros(0, dtype=np.float32))
 
 
 # ============================================================

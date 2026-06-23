@@ -8,7 +8,7 @@
 
 ## P2 — Khung CMDP
 - **P2.1** `(S, A, P, r, {g_c}, γ)` primal-dual — ✅[`Yongshuai Liu…[2020].pdf`; `Wen Wu…[2020].pdf`; `Qiang Liu…[2021].pdf`] *(thay Altman 1999 — vắng corpus)*. ⚠️ `γ` ở đây = **RL discount của CMDP**, KHÁC `β` priority temperature (#3).
-- ⟲ state/action khớp PHẦN 2 (obs K=1=31 / K=3=51 assert @[W18](W18_pha3_algorithm_code.md); action 7-dim K=3).
+- ⟲ state/action khớp PHẦN 2 (obs K=1=31 / K=3=51 assert @[W18](W18_pha3_algorithm_code.md); Worker action 1-dim K=1 / (1+K)-dim K≥2; Manager action 1-dim b_rrm).
 
 ## P3 — Ràng buộc (mỗi cái 1 nguồn)
 - **P3.1** `C1: E[D_e2e^k] ≤ D_max^{sev_k}` — ✅[3GPP TS 22.261 §7.2/Annex A] (nối M6)
@@ -23,9 +23,9 @@
 - **P4.2** Disclaimer **đối ngẫu yếu** (no zero-duality-gap, deep-NN) — ✅[`Lindsay Spoor…[2025].pdf`].
 
 ## P5 — Tầng intra-slice (cấu trúc)
-- **P5.1** Guaranteed-min Option B: `b=max(floor(κ·B_U/K), PRB_min^QoS)` (fallback `b=B_U//K` nếu `K·b>B_U`), `S=B_U−K·b`, `w_k=softmax(β·severity_per_amb[k] + δ·ũ_k)`, `PRB_k=b+S·w_k`. β = priority temp ∈[BETA_MIN,BETA_MAX]=[0,5] (squash sigmoid từ action a[6], K≥2; K=1: β≡BETA_MIN) — ✅ nguyên lý weighted-priority [3GPP TS 23.501 §5.7 5QI] *(WFQ Parekh&Gallager vắng corpus → "tương tự WFQ" KHÔNG ✅)*.
-- **P5.2** 2 structural guarantee (đại số tự chứa, verify bằng test `tests/test_env_severity_k.py`): feasibility `ΣPRB=B_U` (cần `B_U≥K·PRB_min^QoS`); no-starvation CỨNG `PRB_k≥b≥PRB_min^QoS`; weight-ordering đơn điệu `severity_per_amb[i]>severity_per_amb[j]⟹w_i>w_j` (đảm bảo bởi `δ=ρ·β, ρ=RHO_URGENCY_TIEBREAK=0.15`). K=1: `softmax([x])=[1.0]` ⟹ `PRB_0=B_U` luôn (numeric preservation).
-- **P5.3** Tiebreaker cấp 2 `urgency_k=λ_C1_k` (per-amb λ_local trong obs per-amb block, `ũ_k=λ_C1_k/max(λ_C1)∈[0,1]`, #16) — phá hòa CHỈ trong cùng tier.
+- **P5.1** ⚠️ **Thuật toán intra-slice ĐÃ ĐỔI** (W18+): `κ/δ-softmax` bên dưới là **lịch sử design**; code thực thi = **severity-ordered N_req tier-protection** (2 pha), xem [05_agent_workflow.md](../05_agent_workflow.md#intra-slice-priority-worker-k2) và `oran_env.py:_prb_split_intra_slice`. ~~`b=max(floor(κ·B_U/K), PRB_min^QoS)`, `w_k=softmax(β·sev+δ·ũ)`, `PRB_k=b+S·w_k`~~ → Pha 1: `N_req[k]=ceil(C_req[sev_k]/cap_per_prb(SINR_k))` theo tier severity giảm dần; Pha 2: surplus theo `score[k]=N_req·(1+β·urgency)·softmax(w)[k]`. `β∈[BETA_MIN,BETA_MAX]=[0.5,5]` (squash sigmoid từ `a[0]`, K≥2; K=1: β≡BETA_MIN). — ✅ nguyên lý weighted-priority [3GPP TS 23.501 §5.7 5QI].
+- **P5.2** 2 structural guarantee (đại số tự chứa, verify bằng test `tests/test_env_severity_k.py`): feasibility `ΣPRB=B_U` (cần `B_U≥K·PRB_min^QoS`); no-starvation CỨNG `PRB_k≥PRB_MIN_QOS`; tier-ordering (severity cao → cấp trước). K=1: `PRB_0=B_U` luôn (numeric preservation). *(Legacy `δ=ρ·β, ρ=RHO_URGENCY_TIEBREAK=0.15` = unused.)*
+- **P5.3** Tiebreaker cấp 2 `urgency_k=λ_C1_k` (per-amb λ_local trong obs per-amb block, normalized ∈[0,1]) — phá hòa CHỈ trong cùng tier severity.
 
 ## ⟲ RÀ SOÁT P1–P5
 softmax đơn điệu theo sev (test mọi pair, kể cả ũ biên); Σw=1; b≤PRB_k≤B_U; C6 ghi rõ "soft/metric, không zero-violation"; ký hiệu khớp 1-1 obs/action PHẦN 2; γ(RL)≠β(priority).

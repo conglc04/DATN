@@ -4,7 +4,7 @@
 > **REVISED**: B3-RCPO (Lagrangian-penalty PPO) đã loại HOÀN TOÀN; sibling off-policy thứ 2 = SAC (B7). β_qp/NSF-distillation/`nsf.py` đã gỡ — safety = closed-form `Π_feasible`.
 
 ## Đã xây (3 solver = SIBLINGS, áp dụng SAU khi Pha 2 statement complete)
-- `agents/ppo_core.py`, `agents/manager_agent.py` (rApp, action 1-dim K=1 sau gỡ MEC), `agents/worker_agent.py` (xApp).
+- `agents/ppo_core.py`, `agents/manager_agent.py` (Manager, action 1-dim K=1 sau gỡ MEC), `agents/worker_agent.py` (xApp).
 - `solvers/td3.py` — TD3 + Lagrangian (deterministic actor) [Fujimoto 2018, `fujimoto18a.pdf`].
 - `solvers/sac.py` — SAC + Lagrangian (max-entropy stochastic actor) [Haarnoja 2018, `1812.05905v2.pdf`].
 

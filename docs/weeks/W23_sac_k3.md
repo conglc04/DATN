@@ -3,10 +3,10 @@
 > **Pha**: 3 · **Status**: 📅 PLANNED · **Gate**: **GATE 3F** · **Solver**: SAC (off-policy, max-entropy) · **K**: 3 (3 xe cứu thương) · **Build**: B7 (đã code ở W22) + B5 (đã code ở W18) · **Deps**: GATE 3E
 
 ## Env config (giống W19/W21, KHÔNG đổi)
-gNB/cell-center = `(0,0)`, R_cell=300m, UMi 3GPP TR 38.901, single-cell, no handover. `K_ambulances=3` → obs=51 (B5, code đã xong ở W18).
+gNB/cell-center = `(0,0)`, R_cell=1km, UMa 3GPP TR 38.901 + interference margin −86 dBm/PRB, single-cell, no handover. `K_ambulances=3` → obs=51 (B5, code đã xong ở W18).
 
 ## A-SAC — SAC solver run, K=3 (severity + intra-slice + C6)
-- **A-SAC.3** Train `SACBaseline` trên env K=3, ≥10 seeds, MCI single-cell @ Bạch Mai (3 xe đồng trú 1 cell, hội tụ, severity khác nhau → triage contention).
+- **A-SAC.3** Train `SACSolver` trên env K=3, ≥10 seeds, MCI single-cell @ Bạch Mai (3 xe đồng trú 1 cell, hội tụ, severity khác nhau → triage contention).
 - **A-SAC.4** Log: episode reward, c_vec/λ **(4K+1)=13 ở K=3** (layout nhóm-theo-constraint `[C1_0..2, C2_0..2, C4_0..2, C5_0..2, C3_shared]`, KHÔNG interleave theo xe), λ-trajectory + saturation-rate; **C6 = structural metric** (priority-inversion rate, KHÔNG λ_C6, KHÔNG Lagrangian), critic/actor/alpha loss, α-trajectory.
 - **A-SAC.5** Verify cấu trúc K=3 cho SAC:
   - **ordering-compliance**: `sev_i>sev_j ∧ S>0 ⟹ PRB_i>PRB_j` (khi surplus S>0).

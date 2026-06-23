@@ -95,12 +95,12 @@ class TestTD3Agent:
         np.testing.assert_allclose(a1, a2, atol=1e-5)
 
 
-class TestTD3Baseline:
+class TestTD3Solver:
     """W07: TD3 uses 5-dim LambdaState (sibling solver to PPO + SAC)."""
 
     def test_instantiate(self):
-        from solvers.td3 import TD3Baseline
-        agent = TD3Baseline(state_dim=40, action_dim=6, seed=0)
+        from solvers.td3 import TD3Solver
+        agent = TD3Solver(state_dim=40, action_dim=6, seed=0)
         assert agent is not None
         assert agent.lambda_state.n_constraints == 5
         assert hasattr(agent, "store_transition")
@@ -108,8 +108,8 @@ class TestTD3Baseline:
         assert not hasattr(agent, "lagrangian")
 
     def test_select_action_returns_tuple(self):
-        from solvers.td3 import TD3Baseline
-        agent = TD3Baseline(state_dim=40, action_dim=6, seed=0)
+        from solvers.td3 import TD3Solver
+        agent = TD3Solver(state_dim=40, action_dim=6, seed=0)
         obs = np.zeros(40, dtype=np.float32)
         action, log_prob, value = agent.select_action(obs)
         assert action.shape == (6,)
@@ -118,8 +118,8 @@ class TestTD3Baseline:
 
     def test_lambda_state_lifecycle(self):
         """on_episode_start → on_manager_step_start → accumulate → on_manager_step_end."""
-        from solvers.td3 import TD3Baseline
-        agent = TD3Baseline(state_dim=40, action_dim=6, seed=0, alpha_lambda=0.5)
+        from solvers.td3 import TD3Solver
+        agent = TD3Solver(state_dim=40, action_dim=6, seed=0, alpha_lambda=0.5)
         agent.on_episode_start((3,), 3)
         agent.on_manager_step_start((3,), 3)
         # Heavy URLLC violation: positive c_vec[0..1] - d_phi[0..1]
@@ -138,8 +138,8 @@ class TestTD3Baseline:
         # TD3 is a phase-AWARE equal sibling (use_phase=True): maybe_mask must
         # leave the phase one-hot intact. (Regression: it used to mask phase,
         # making TD3 phase-blind and the PPO/TD3/SAC comparison unfair.)
-        from solvers.td3 import TD3Baseline
-        agent = TD3Baseline(state_dim=40, action_dim=6, seed=0)
+        from solvers.td3 import TD3Solver
+        agent = TD3Solver(state_dim=40, action_dim=6, seed=0)
         assert agent.flags.use_phase is True
         obs = np.arange(40, dtype=np.float32)
         np.testing.assert_array_equal(agent.maybe_mask(obs), obs)
@@ -149,7 +149,7 @@ class TestTD3SmokeTrainOneEpisode:
     """1-episode smoke through smoke_train.train()."""
 
     def test_runs_without_crash(self):
-        from solvers.smoke_train import train
+        from solvers.train_offpolicy import train
         stats = train(
             baseline_name="td3",
             n_episodes=1,
@@ -172,7 +172,7 @@ class TestSolverObservesLambda:
     """
 
     def test_smoke_train_injects_nonzero_lambda(self, monkeypatch):
-        import solvers.smoke_train as st
+        import solvers.train_offpolicy as st
 
         seen = {"calls": 0, "nonzero": False}
         real = st.overlay_lambda_local

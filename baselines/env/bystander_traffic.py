@@ -10,6 +10,12 @@ Reference: docs/02_requirements.md:51-53 (Sub-scenario S2B)
 Implements:
     - BystanderArrivalModel: time-varying UE arrival process around a triggering event
     - Per-UE traffic generator (eMBB livestream at 2-5 Mbps)
+
+Traffic model references:
+    - eMBB background M UEs (bystander): Weijian Zhou et al. §IV
+    - R_REF=100 Mbps eMBB normalisation anchor: Weijian Zhou et al. §IV
+      (engineering estimate; sensitivity {50,100,200,300} Mbps scheduled —
+      REFERENCE_MAP §5).
 """
 
 from __future__ import annotations

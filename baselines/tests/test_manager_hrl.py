@@ -1,8 +1,8 @@
 """HRL wiring tests — env hook + Manager agents + causal PRB effect.
 
 Covers:
-    - set_rrm_budget(): anchor update, feasibility clipping, renormalisation
-    - obs[16] = r_min_urllc_anchor (anchor fixed per window; obs[4] drifts)
+    - set_rrm_budget(): anchor update, feasibility clipping, eMBB complement
+    - obs[16] = r_min_urllc_anchor (Manager-owned; Worker action cannot drift obs[4])
     - Causal PRB effect: higher b_rrm → more URLLC PRBs; per-amb sum invariant
     - decode_manager_action(): always in [B_RRM_MIN, B_RRM_MAX]
     - build_manager_state(): severity_norm at position 3
@@ -46,9 +46,12 @@ def _make_env(K: int = 1) -> ORANEnv:
 class TestSetRrmBudget:
     def test_updates_anchor_within_feasible_range(self):
         env = _make_env()
-        env.set_rrm_budget(0.3)
-        assert env.r_min_urllc == pytest.approx(0.3, abs=1e-9)
-        assert env.r_min_urllc_anchor == pytest.approx(0.3, abs=1e-9)
+        # Pin severity → floor B_RRM_FLOOR_BY_SEV[1]=0.65 so 0.75 is in-range
+        # (sample_severity makes the floor vary 0.65→0.85; exact-value tests pin it).
+        env.severity = 1
+        env.set_rrm_budget(0.75)
+        assert env.r_min_urllc == pytest.approx(0.75, abs=1e-9)
+        assert env.r_min_urllc_anchor == pytest.approx(0.75, abs=1e-9)
         env.close()
 
     def test_clips_to_effective_upper_bound(self):
@@ -66,19 +69,21 @@ class TestSetRrmBudget:
         assert env.r_min_urllc_anchor == pytest.approx(hi, abs=1e-9)
         env.close()
 
-    def test_renormalizes_when_sum_exceeds_one(self):
-        """If r_min_urllc + r_max_emBB > 1 after anchoring, r_max_emBB is trimmed."""
+    def test_manager_sets_embb_complement(self):
+        """Manager-owned inter-slice split: r_max_eMBB is always the remainder."""
         env = _make_env()
-        env.r_max_emBB = 0.7  # force a high eMBB ratio
-        env.set_rrm_budget(0.4)  # 0.4 is within cap; 0.4+0.7=1.1 > 1.0
-        assert env.r_min_urllc + env.r_max_emBB <= 1.0 + 1e-9
+        env.severity = 1  # floor 0.65 → 0.75 in-range
+        env.r_max_emBB = 0.7  # stale value should be overwritten by Manager setpoint
+        env.set_rrm_budget(0.75)
+        assert env.r_min_urllc == pytest.approx(0.75, abs=1e-9)
+        assert env.r_max_emBB == pytest.approx(0.25, abs=1e-9)
         env.close()
 
     def test_r_ded_urllc_le_r_min_after_step(self):
         """C6 invariant: r_ded_urllc ≤ r_min_urllc holds after a single step."""
         env = _make_env()
         env.set_rrm_budget(0.15)
-        env.step(np.zeros(6, dtype=np.float32))
+        env.step(np.zeros(env.action_space.shape, dtype=np.float32))
         assert env.r_ded_urllc <= env.r_min_urllc + 1e-9
         env.close()
 
@@ -89,8 +94,7 @@ class TestSetRrmBudget:
         env.reset(seed=0)
         env.set_rrm_budget(0.3)
         for i in range(100):
-            a = rng.uniform(-1.0, 1.0, size=6).astype(np.float32)
-            a[2:] = np.clip(a[2:], 0.0, 1.0)
+            a = rng.uniform(-3.0, 3.0, size=env.action_space.shape).astype(np.float32)
             _, _, term, trunc, _ = env.step(a)
             assert env.r_ded_urllc <= env.r_min_urllc + 1e-9, (
                 f"step {i}: r_ded={env.r_ded_urllc:.6f} > r_min={env.r_min_urllc:.6f}"
@@ -115,15 +119,16 @@ class TestSetRrmBudget:
 class TestCausalPrbEffect:
     def test_causal_prb_effect_k3(self):
         """K=3: high b_rrm → more URLLC PRBs; per-amb sum equals total PRB budget."""
-        a0 = np.zeros(6, dtype=np.float32)
-
+        # Pin severity=1 (floor 0.65) so both budgets are in-range and distinct.
         env_hi = _make_env(K=3)
-        env_hi.set_rrm_budget(0.5)
-        _, _, _, _, info_hi = env_hi.step(a0)
+        env_hi.severity = 1
+        env_hi.set_rrm_budget(0.80)
+        _, _, _, _, info_hi = env_hi.step(np.zeros(env_hi.action_space.shape, dtype=np.float32))
 
         env_lo = _make_env(K=3)
-        env_lo.set_rrm_budget(0.1)
-        _, _, _, _, info_lo = env_lo.step(a0)
+        env_lo.severity = 1
+        env_lo.set_rrm_budget(0.65)
+        _, _, _, _, info_lo = env_lo.step(np.zeros(env_lo.action_space.shape, dtype=np.float32))
 
         # Causal: higher b_rrm → more URLLC PRBs allocated
         assert info_hi["prb_urllc"] > info_lo["prb_urllc"]
@@ -136,9 +141,9 @@ class TestCausalPrbEffect:
 
     def test_prb_per_amb_len_equals_k(self):
         """info['prb_per_amb'] has exactly K entries."""
-        for K in (1, 2, 3):
+        for K in (1, 3):   # SUMO+OSM traces exist for K in {1,3}
             env = _make_env(K=K)
-            _, _, _, _, info = env.step(np.zeros(6, dtype=np.float32))
+            _, _, _, _, info = env.step(np.zeros(env.action_space.shape, dtype=np.float32))
             assert len(info["prb_per_amb"]) == K
             env.close()
 
@@ -148,37 +153,38 @@ class TestCausalPrbEffect:
 # ============================================================
 
 class TestAnchorObs:
-    def test_anchor_fixed_while_worker_drifts(self):
-        """obs[16]=anchor stays at set value while obs[4] drifts via Worker delta_r_min."""
+    def test_worker_cannot_drift_manager_anchor(self):
+        """obs[16]=anchor and obs[4]=live r_min both stay at Manager setpoint."""
         env = _make_env()
-        env.set_rrm_budget(0.5)
-        a = np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)  # a[0]=delta_r_min push
+        env.severity = 1  # floor 0.65 → 0.75 in-range
+        env.set_rrm_budget(0.75)
+        a = np.full(env.action_space.shape, 3.0, dtype=np.float32)
         obs, _, _, _, _ = env.step(a)
-        assert obs[16] == pytest.approx(0.5, abs=1e-6)   # anchor unchanged
-        assert obs[4] != pytest.approx(0.5, abs=1e-6)    # live r_min_urllc drifted
-        # drift direction: a[0]=+1 pushes r_min_urllc up by 0.1
-        assert obs[4] == pytest.approx(0.6, abs=1e-5)
-        assert obs[4] - obs[16] == pytest.approx(0.1, abs=1e-5)
+        assert obs[16] == pytest.approx(0.75, abs=1e-6)   # anchor unchanged
+        assert obs[4] == pytest.approx(0.75, abs=1e-6)    # Worker cannot change inter-slice
         env.close()
 
-    def test_anchor_negative_drift(self):
-        """action[0]=-1 pushes r_min_urllc down; obs[16] still holds set value."""
+    def test_worker_negative_action_does_not_change_rmin(self):
+        """Negative Worker action changes no inter-slice ratio."""
         env = _make_env()
-        env.set_rrm_budget(0.4)
-        a = np.array([-1.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        env.severity = 1  # floor 0.65 → 0.75 in-range
+        env.set_rrm_budget(0.75)
+        a = np.full(env.action_space.shape, -3.0, dtype=np.float32)
         obs, _, _, _, _ = env.step(a)
-        assert obs[16] == pytest.approx(0.4, abs=1e-6)   # anchor fixed
-        assert obs[4] == pytest.approx(0.3, abs=1e-5)    # drifted down
+        assert obs[16] == pytest.approx(0.75, abs=1e-6)   # anchor fixed
+        assert obs[4] == pytest.approx(0.75, abs=1e-6)
         env.close()
 
     def test_anchor_stable_over_multiple_steps(self):
         """obs[16] stays at anchor across an entire Manager window (10 steps)."""
         env = _make_env()
-        env.set_rrm_budget(0.35)
-        a_push = np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        env.severity = 1  # floor 0.65 → 0.75 in-range
+        env.set_rrm_budget(0.75)
+        a_push = np.full(env.action_space.shape, 3.0, dtype=np.float32)
         for _ in range(10):
             obs, _, term, trunc, _ = env.step(a_push)
-            assert obs[16] == pytest.approx(0.35, abs=1e-6), "anchor must not change mid-window"
+            assert obs[16] == pytest.approx(0.75, abs=1e-6), "anchor must not change mid-window"
+            assert obs[4] == pytest.approx(0.75, abs=1e-6), "Worker must not change Manager-owned r_min"
             if term or trunc:
                 break
         env.close()
@@ -189,9 +195,10 @@ class TestAnchorObs:
         obs0, _ = env.reset(seed=0)
         assert obs0[16] == pytest.approx(0.6, abs=1e-6)
 
-        env.set_rrm_budget(0.3)
-        obs1, _, _, _, _ = env.step(np.zeros(6, dtype=np.float32))
-        assert obs1[16] == pytest.approx(0.3, abs=1e-6)
+        env.severity = 1  # floor 0.65 → 0.75 in-range
+        env.set_rrm_budget(0.75)
+        obs1, _, _, _, _ = env.step(np.zeros(env.action_space.shape, dtype=np.float32))
+        assert obs1[16] == pytest.approx(0.75, abs=1e-6)
         env.close()
 
 
@@ -206,7 +213,7 @@ class TestDecodeManagerAction:
         assert B_RRM_MIN <= b <= B_RRM_MAX + 1e-9
 
     def test_midpoint_at_zero(self):
-        """raw=0 → b_rrm = (B_RRM_MIN + B_RRM_MAX) / 2 = 0.45."""
+        """raw=0 → b_rrm = (B_RRM_MIN + B_RRM_MAX) / 2 = 0.75 (0.65..0.85)."""
         b = decode_manager_action(np.array([0.0]))["b_rrm"]
         assert b == pytest.approx((B_RRM_MIN + B_RRM_MAX) / 2.0, abs=1e-9)
 
@@ -345,11 +352,11 @@ class TestManagerAct:
 
 class TestSidecarCheckpoints:
     def test_td3_sidecar_created_on_save(self, tmp_path):
-        from solvers.td3 import TD3Baseline
+        from solvers.td3 import TD3Solver
         env = ORANEnv(EnvConfig())
         state_dim = env.observation_space.shape[0]
         action_dim = env.action_space.shape[0]
-        agent = TD3Baseline(state_dim=state_dim, action_dim=action_dim, seed=0)
+        agent = TD3Solver(state_dim=state_dim, action_dim=action_dim, seed=0)
         ckpt = str(tmp_path / "td3_test.pt")
         agent.save(ckpt)
         mgr_ckpt = ckpt.replace(".pt", "_manager.pt")
@@ -357,11 +364,11 @@ class TestSidecarCheckpoints:
         env.close()
 
     def test_sac_sidecar_created_on_save(self, tmp_path):
-        from solvers.sac import SACBaseline
+        from solvers.sac import SACSolver
         env = ORANEnv(EnvConfig())
         state_dim = env.observation_space.shape[0]
         action_dim = env.action_space.shape[0]
-        agent = SACBaseline(state_dim=state_dim, action_dim=action_dim, seed=0)
+        agent = SACSolver(state_dim=state_dim, action_dim=action_dim, seed=0)
         ckpt = str(tmp_path / "sac_test.pt")
         agent.save(ckpt)
         mgr_ckpt = ckpt.replace(".pt", "_manager.pt")
@@ -370,27 +377,27 @@ class TestSidecarCheckpoints:
 
     def test_td3_sidecar_load_roundtrip(self, tmp_path):
         """TD3 load() silently skips sidecar if absent; loads when present."""
-        from solvers.td3 import TD3Baseline
+        from solvers.td3 import TD3Solver
         env = ORANEnv(EnvConfig())
         state_dim = env.observation_space.shape[0]
         action_dim = env.action_space.shape[0]
-        agent = TD3Baseline(state_dim=state_dim, action_dim=action_dim, seed=0)
+        agent = TD3Solver(state_dim=state_dim, action_dim=action_dim, seed=0)
         ckpt = str(tmp_path / "td3_rt.pt")
         agent.save(ckpt)
-        agent2 = TD3Baseline(state_dim=state_dim, action_dim=action_dim, seed=99)
+        agent2 = TD3Solver(state_dim=state_dim, action_dim=action_dim, seed=99)
         agent2.load(ckpt)   # must not raise
         env.close()
 
     def test_td3_load_without_sidecar_does_not_crash(self, tmp_path):
         """load() with no _manager.pt present is a silent no-op for the Manager."""
-        from solvers.td3 import TD3Baseline
+        from solvers.td3 import TD3Solver
         env = ORANEnv(EnvConfig())
         state_dim = env.observation_space.shape[0]
         action_dim = env.action_space.shape[0]
-        agent = TD3Baseline(state_dim=state_dim, action_dim=action_dim, seed=0)
+        agent = TD3Solver(state_dim=state_dim, action_dim=action_dim, seed=0)
         ckpt = str(tmp_path / "td3_nosidecar.pt")
         agent.td3.save(ckpt)   # save only the Worker, no sidecar
-        agent2 = TD3Baseline(state_dim=state_dim, action_dim=action_dim, seed=0)
+        agent2 = TD3Solver(state_dim=state_dim, action_dim=action_dim, seed=0)
         agent2.load(ckpt)      # must not raise even though _manager.pt absent
         env.close()
 
@@ -402,7 +409,7 @@ class TestSidecarCheckpoints:
 class TestManagerRewardAccumulation:
     def test_td3_smoke_runs_without_crash(self, tmp_path):
         """Smoke: TD3 smoke_train completes 2 episodes with Manager loop wired."""
-        from solvers.smoke_train import train
+        from solvers.train_offpolicy import train
         summary = train(
             "td3",
             n_episodes=2,
@@ -415,7 +422,7 @@ class TestManagerRewardAccumulation:
 
     def test_sac_smoke_runs_without_crash(self, tmp_path):
         """Smoke: SAC smoke_train completes 2 episodes with Manager loop wired."""
-        from solvers.smoke_train import train
+        from solvers.train_offpolicy import train
         summary = train(
             "sac",
             n_episodes=2,

@@ -16,10 +16,10 @@ Severity = **thang phân loại triage 5 mức** theo **ATS — Australasian Tri
   | 4 | EMERGENCY | ATS 2 | emergency — imminently life-threatening (≤10 phút) |
   | 5 | IMMEDIATE | ATS 1 | immediate / resuscitation — life-threatening |
 
-- **M11.2** **Exogenous + cố định trong 1 episode** (episode = 1s — quá ngắn để severity đổi; gán 1 lần khi ekip tiếp cận bệnh nhân). **KHÔNG mô phỏng giá trị sinh hiệu** (severity là category rời rạc). KHÔNG CTMC/birth-death/phase-event — bỏ hoàn toàn (không còn pha trong-episode để drive transition).
+- **M11.2** **Exogenous + cố định trong cả episode (= trọn hành trình MCI tới all-arrived/400s)** — severity gán **1 lần khi ekip tiếp cận bệnh nhân** và giữ nguyên suốt mission (chẩn đoán triage không đổi giữa đường). **KHÔNG mô phỏng giá trị sinh hiệu** (severity là category rời rạc). KHÔNG CTMC/birth-death/phase-event — bỏ hoàn toàn (không còn pha trong-episode để drive transition).
 - **M11.3** **Sampling**: TRAIN random/episode từ `severity_sample_weights` (uniform `(.20,.20,.20,.20,.20)` — không giả định phân phối, mọi mức xác suất bằng nhau); EVAL scripted cố định (seed) — (a) `[1,3,5]` ordering 3 xe; (b) `[5,5,5]` MCI toàn nguy kịch; (c) `[5,1]` money-shot Immediate vs Non-urgent.
 - **M11.4** Severity → **QoS tier** (config.py): `SEVERITY_QOS[sev]` (D_max, ε, AoI_max, R_min) + `α_eMBB(sev)` (đơn điệu ngược: 0.70→0.05) + `λ_warm[sev]` (warm-start, đơn điệu tăng).
-- **M11.5** Severity → **network priority** (K≥2): intra-slice PRB weight `softmax(β·sev+δ·ũ)` + C6 ordering — 🔴 **design principle** (analogy từ ED triage prioritization [ATS]; KHÔNG ref mạng trực tiếp). Khi 2 xe đồng severity: tie-break theo constraint-slack → channel (SINR) → AoI-ratio (đều đã có trong obs, KHÔNG thêm hyperparam).
+- **M11.5** Severity → **network priority** (K≥2): severity-ordered N_req tier-protection + surplus `score[k]=N_req·(1+β·urgency)·softmax(w)[k]` *(thay `softmax(β·sev+δ·ũ)` cũ — legacy unused)* + C6 ordering — 🔴 **design principle** (analogy từ ED triage prioritization [ATS]; KHÔNG ref mạng trực tiếp). Khi 2 xe đồng severity: tie-break theo urgency (λ_C1) + per-vehicle logits (đều đã có trong obs/action, KHÔNG thêm hyperparam).
 
 ## ⟲ RÀ SOÁT M11
 
@@ -31,4 +31,4 @@ Mọi 🟡 của M1–M11 đã thành ✅; mọi 🔴 đã declared + có sensit
 
 ## Liên kết
 
-Master plan PHẦN 11/W16 + §1.1 · `severity.py` ([docs/08](../08_implementation_notes.md)) · severity → intra-slice PRB weight `softmax(β·sev+δ·ũ)` formal hoá ở [W17](W17_pha2_cmdp_formulation.md)/P5 (β = priority temp, KHÔNG RL discount).
+Master plan PHẦN 11/W16 + §1.1 · `severity.py` ([docs/08](../08_implementation_notes.md)) · severity → intra-slice PRB: severity-ordered N_req tier-protection formal hoá ở [W17](W17_pha2_cmdp_formulation.md)/P5 (β = priority temp, KHÔNG RL discount).

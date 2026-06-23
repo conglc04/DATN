@@ -17,7 +17,7 @@
 ## Scope cuts nếu trễ
 - C5 tail-AoI → demote optional (dựa C4 mean).
 - C6 → metric thuần (đã demote).
-- KNN site-specific channel → bỏ (dùng UMi generic TR 38.901).
+- KNN site-specific channel → bỏ (dùng UMa generic TR 38.901).
 - (E3/E4 đã → future work toàn bộ, D26 — không còn là "scope cut", là default.)
 
 ## Cross-reference

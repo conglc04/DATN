@@ -10,6 +10,13 @@ Implements 6 generators per docs/02_requirements.md#traffic-classes:
 
 Each generator yields Packet(arrival_time, size_bits, ttype, deadline,
 priority, payload_id) and is rng-seeded for reproducibility.
+
+Traffic model references:
+    - URLLC Poisson arrival process: Madyan Alsenwi et al. 2022 §II;
+      R. Sohaib et al. 2024 §III
+    - Packet size/rate parameters (URLLC_C1/C2/C3): declared assumptions
+      (IEEE 11073 device rates / 3GPP V2X message sizes — chuẩn ngoài
+      corpus; REFERENCE_MAP §5 sensitivity sweep scheduled).
 """
 
 from __future__ import annotations

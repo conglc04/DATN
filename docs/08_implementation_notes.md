@@ -6,7 +6,7 @@
 ```
 baselines/                       # repo code root (đổi tên từ pa_chrl_ppo/)
 ├── env/
-│   ├── channel_model.py      # UMi 3GPP TR 38.901 (single-cell 300m Bạch Mai)
+│   ├── channel_model.py      # UMa(sweep)/UMi(legacy) 3GPP TR 38.901 (single-cell 1km Bạch Mai + interference margin −86 dBm/PRB)
 │   ├── queue_model.py        # M/G/1 Pollaczek–Khinchine
 │   ├── traffic_gen.py        # URLLC (F=1, "ambulance_status") + eMBB bystander, payload/rate
 │   ├── aoi_tracker.py        # AoI LCFS+drop (timestamp only, no vitals; 1 luồng "ambulance_status")
@@ -29,7 +29,7 @@ baselines/                       # repo code root (đổi tên từ pa_chrl_ppo/
 - ✅ **vital_simulator.py** XÓA (sinh vitals giả). GIỮ telemetry — gộp thành 1 luồng `ambulance_status` (F=1, traffic_gen; xem "F=4→F=1 stream consolidation" bên dưới, thay cho HR/SpO2/ECG/DENM cũ).
 - ✅ **β_qp / NSF distillation / nsf.py / LR_NSF** XÓA: safety filter → closed-form `Π_feasible` (Duchi simplex + isotonic) — CHƯA implement code (W18/B5).
 - ✅ **B3-RCPO** XÓA hoàn toàn (3 solver = PPO/TD3/SAC).
-- → obs K=1: 40 → **33** (B0/B0b) → **31** (phase→severity swap) → **28** (F=4→F=1 stream consolidation) → **30** (per-ambulance queue/AoI split) → **31** (per-ambulance `severity_k` epic, `20+10K+F`, xem dưới); K=3,F=1 → **51**.
+- → obs K=1: 40 → **33** (B0/B0b) → **31** (phase→severity swap) → **28** (F=4→F=1 stream consolidation) → **30** (per-ambulance queue/AoI split) → **31** (per-ambulance `severity_k` epic, `20+10K+F`) → **32** (+active_mask_k, `20+11K+F`, 2026-06-23, xem dưới); K=3,F=1 → **54**.
 
 ## Phase→Severity swap (✅ 2026-06-14) — severity thay phase làm trục ưu tiên
 
@@ -77,9 +77,9 @@ baselines/                       # repo code root (đổi tên từ pa_chrl_ppo/
 
 - **`(4K+1)`-dim Lagrangian/c_vec/d_phi**: layout `[C1_0..C1_{K-1}, C2_0..C2_{K-1}, C4_0..C4_{K-1}, C5_0..C5_{K-1}, C3_shared]` (C3 = eMBB throughput floor, shared/global, luôn ở slot cuối). K=1 = permutation `[0,1,3,4,2]` của thứ tự cũ `[C1,C2,C3,C4,C5]` — numerically identical, verify bằng `build_lambda_warm_vector`/`build_dual_scales`/`build_d_phi_vector` (`utils/config.py`).
 - **`LambdaState` (agents/lagrangian.py)**: K-aware, `n_constraints=4K+1`; API `reset_episode(severity_per_amb, severity_ref)`, `on_manager_step_start(severity_per_amb, severity_ref)`, `on_episode_end(severity_per_amb, severity_ref)` (2-arg: tuple `(K,)` + int `severity_ref` — transition/EMA-save keyed bởi `severity_per_amb` tuple). `lam.dual_scales` (K-aware, instance attr) thay `CONSTRAINT_DUAL_SCALES` module-level (5-dim, OLD order).
-- **obs `20+10K+F`** (K=1,F=1→31; K=3,F=1→51): 20 fixed = ρ/HOL/PRB-ratio/arrival/BLER(10) + severity_ref one-hot[10:15] + λ_local_C3_shared[15] + rrm_budget/n_bys/AoI mean/max(4); per-amb (×K, 10-dim, base=`20+10k`) = `{SINR_k, d_k, v_k, delay_norm_k, AoI_norm_k, severity_norm_k, λ_C1_k, λ_C2_k, λ_C4_k, λ_C5_k}`. `overlay_lambda_local(obs, lambda_local, K)` (utils/obs.py) scatter non-contiguous: per-amb λ vào offset 6-9 của mỗi khối 10-dim, λ_C3_shared vào index 15.
-- **action K-dependent**: K=1 = 6-dim (không đổi); K≥2 = 7-dim, +`a[6]`→β = `BETA_MIN+(BETA_MAX-BETA_MIN)·sigmoid(a[6])`, `BETA_MIN=0.0, BETA_MAX=5.0`. K=1: `_beta := BETA_MIN` cố định (không đọc a[6]).
-- **`_prb_split_intra_slice(prb_urllc)`**: `b=max(floor(INTRA_SLICE_KAPPA·B_U/K), PRB_MIN_QOS)` (fallback `b=B_U//K` nếu `K·b>B_U`), `S=B_U-K·b`, `w=softmax(β·(severity_per_amb/5) + δ·ũ)` (severity NORMALIZED ÷5 → β = global gain; `δ=RHO_URGENCY_TIEBREAK·β`, `ũ_k=λ_C1_k/max(λ_C1)`), `PRB_k=b+S·w_k`. `β∈[BETA_MIN,BETA_MAX]=[0.5,5]` — **BETA_MIN>0** (main method) đảm bảo ordering severity tối thiểu (agent không thể học β→0 làm phẳng priority). K=1: `softmax([x])=[1.0]` ∀x ⟹ `PRB_0=B_U` luôn (numeric preservation, không phụ thuộc β/severity/urgency).
+- **obs `20+11K+F`** (K=1,F=1→32; K=3,F=1→54): 20 fixed = ρ/HOL/PRB-ratio/arrival/BLER(10) + severity_ref one-hot[10:15] + λ_local_C3_shared[15] + rrm_budget/n_bys/AoI mean/max(4); per-amb (×K, 11-dim, base=`20+11k`) = `{SINR_k, d_k, v_k, delay_norm_k, AoI_norm_k, severity_norm_k, λ_C1_k, λ_C2_k, λ_C4_k, λ_C5_k, active_mask_k}` (active_mask_k∈{0,1}=entered_k&~arrived_k, offset 10, 2026-06-23). `overlay_lambda_local(obs, lambda_local, K)` (utils/obs.py) scatter non-contiguous: per-amb λ vào offset 6-9 của mỗi khối 11-dim, λ_C3_shared vào index 15.
+- **Worker action K-dependent**: K=1 = **1-dim** (no-op scalar — xe duy nhất nhận toàn bộ URLLC PRBs); K≥2 = **(1+K)-dim** — `a[0]`→β = `BETA_MIN+(BETA_MAX-BETA_MIN)·sigmoid(a[0])`, `a[1:1+K]`→per-vehicle logits w_k. Worker KHÔNG điều khiển inter-slice (Δr_min/Δr_max/r_ded = **legacy ĐÃ GỠ**; inter-slice do Manager `set_rrm_budget` duy nhất).
+- **`_prb_split_intra_slice(prb_urllc)`**: ⚠️ **ĐÃ ĐỔI** sang severity-ordered N_req tier-protection (2 pha). Pha 1: `N_req[k]=ceil(C_req[sev_k]/cap_per_prb(SINR_k))` cấp theo tier severity giảm dần; thiếu trong tier → chia theo `score[k]=N_req·(1+β·urgency)·softmax(w)[k]` (`w=a[1:1+K]`). Pha 2: surplus theo cùng score. `β∈[BETA_MIN,BETA_MAX]=[0.5,5]` — **BETA_MIN>0** đảm bảo ordering severity tối thiểu. K=1: `PRB_0=B_U` luôn (numeric preservation). *(Legacy `κ/δ-softmax` + `INTRA_SLICE_KAPPA`/`RHO_URGENCY_TIEBREAK` = unused.)*
 - **C6 demoted hoàn toàn thành metric**: KHÔNG λ_C6/Lagrangian; severity-ordering⟹delay-ordering là property đại số của `_prb_split_intra_slice` + per-amb queues, verify bằng `tests/test_env_severity_k.py` (K=3: PRB monotonic theo severity với β=BETA_MAX; severity cao hơn ⟹ D_e2e_k thấp hơn dưới SINR bằng nhau).
 - VERIFIED: **237 test xanh** (226 sau permutation/dim fixes + 11 test mới `tests/test_env_severity_k.py`).
 
@@ -90,7 +90,7 @@ baselines/                       # repo code root (đổi tên từ pa_chrl_ppo/
 - **C4 dual-scale**: `AOI_REF_S=0.1s` (scale chuẩn-hóa subgradient, **không** phải ngưỡng); `CONSTRAINT_DUAL_SCALES[3]` 1.0→`AOI_REF_S` (C4 hết yếu ~10× so C1). **C5**: m=1 (`P(AoI>AoI_max)≤ε_AoI^{sev_k}`; code `eps_aoi`/`d5_aoi_tail`).
 
 ## Code changes K≥2 (B5)
-`oran_env.py`: obs per-amb block +severity_norm_k +λ_C{1,2,4,5}_k; action +β (squash [BETA_MIN,BETA_MAX]=[0,5]); intra-slice PRB split Option B `b=max(floor(κB_U/K), PRB_min^QoS)`; `severity_per_amb` exogenous per-ambulance (xem "Per-ambulance severity_k epic" trên). `lagrangian.py`: `(4K+1)`-dim λ/c_vec/d_phi; C6 = structural metric (no λ_C6). `cell_radius_m`: 200→**300** (D25).
+`oran_env.py`: obs per-amb block +severity_norm_k +λ_C{1,2,4,5}_k; action K=1 1-dim (no-op), K≥2 (1+K)-dim: `a[0]`→β (squash [BETA_MIN,BETA_MAX]=[0.5,5]) + `a[1:1+K]`→per-vehicle logits; intra-slice PRB split = **severity-ordered N_req tier-protection** (2 pha; legacy `κ/δ-softmax` ĐÃ GỠ); `severity_per_amb` exogenous per-ambulance (xem "Per-ambulance severity_k epic" trên). `lagrangian.py`: `(4K+1)`-dim λ/c_vec/d_phi; C6 = structural metric (no λ_C6). `cell_radius_m`: 200→300 (D25) → **1000** (W15-B2 macro UMa 2026-06-18).
 
 ## KHÔNG đổi (W11 backward-compat history)
 `train.py` (K=1 default), `run_30runs.py`, `stats_analysis.py` — nhưng số RWP cũ KHÔNG tái dùng (sweep W18–W23 chạy lại trên SUMO mobility).

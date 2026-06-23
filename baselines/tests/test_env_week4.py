@@ -116,9 +116,23 @@ class TestORANEnvAPI:
         assert obs.shape == env.observation_space.shape
         assert np.all(np.isfinite(obs))
 
-    def test_action_space_six_dim(self):
+    def test_action_space_k1_noop_dim(self):
         env = self._make_env()
-        assert env.action_space.shape == (6,)
+        assert env.action_space.shape == (1,)
+
+    def test_aoi_metrics_exposed_for_c4_c5_audit(self):
+        """mean_aoi_ms / aoi_violation_rate are logged so Gate 3x can audit C4/C5."""
+        env = self._make_env()
+        env.reset(seed=0)
+        a = np.zeros(env.action_space.shape, dtype=np.float32)
+        for _ in range(20):
+            env.step(a)
+        aoi_ms = env.mean_aoi_ms()
+        aoi_v = env.aoi_violation_rate()
+        assert aoi_ms >= 0.0 and np.isfinite(aoi_ms)
+        assert 0.0 <= aoi_v <= 1.0
+        # AoI history recorded per MAC tick, same length as the other tick histories
+        assert len(env.aoi_history) == len(env.e2e_history) > 0
 
     def test_episode_terminates_after_100_worker_steps(self):
         """1 s episode = 100 Worker steps × 10 ms = 100 × 20 MAC ticks = 2000 TTI total."""
@@ -145,32 +159,31 @@ class TestORANEnvAPI:
 
 
 class TestActionDecoder:
-    def test_delta_r_min_clamped_and_scaled(self):
+    def test_worker_action_does_not_change_manager_r_min(self):
         from env.oran_env import EnvConfig, ORANEnv
         env = ORANEnv(config=EnvConfig(rrm_budget_hint=0.5), seed=0)
         env.reset(seed=0)
-        # Push r_min up
+        env.set_rrm_budget(0.5)
+        held = env.r_min_urllc   # post-floor setpoint (floor-agnostic)
         for _ in range(10):
-            env.step(np.array([+1.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32))
-        # After 10 ticks of +0.1, r_min should saturate to 1.0
-        assert env.r_min_urllc == pytest.approx(1.0, abs=1e-3)
+            env.step(np.full(env.action_space.shape, 3.0, dtype=np.float32))
+        assert env.r_min_urllc == pytest.approx(held, abs=1e-6)
 
-    def test_c6_min_plus_max_le_one(self):
+    def test_manager_sets_valid_inter_slice_complement(self):
         from env.oran_env import EnvConfig, ORANEnv
         env = ORANEnv(config=EnvConfig(rrm_budget_hint=0.5), seed=0)
         env.reset(seed=0)
-        # Push both up — invariant must hold
-        for _ in range(20):
-            env.step(np.array([+1.0, +1.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32))
+        env.set_rrm_budget(0.3)
+        # eMBB is always the complement of the (post-floor) URLLC budget.
         assert env.r_min_urllc + env.r_max_emBB <= 1.0 + 1e-6
+        assert env.r_max_emBB == pytest.approx(1.0 - env.r_min_urllc, abs=1e-6)
 
     def test_c7_r_ded_le_r_min(self):
         from env.oran_env import EnvConfig, ORANEnv
         env = ORANEnv(config=EnvConfig(rrm_budget_hint=0.3), seed=0)
         env.reset(seed=0)
-        # Set r_ded_ratio = 1 → r_ded = min(0.2, r_min)
         for _ in range(5):
-            env.step(np.array([0.0, 0.0, 1.0, 0.0, 0.0, 0.0], dtype=np.float32))
+            env.step(np.zeros(env.action_space.shape, dtype=np.float32))
         assert env.r_ded_urllc <= env.r_min_urllc + 1e-6
         assert env.r_ded_urllc <= 0.2 + 1e-6
 
@@ -241,7 +254,7 @@ class TestQueueStability:
 
 
 class TestGateP2:
-    """Gate P2 sanity: at φ₃ with r_min^URLLC=0.6 and λ_urllc=50,
+    """Gate P2 sanity: at severity-5 with r_min^URLLC=0.6 and λ_urllc=50,
     mean D_e2e should be < 1ms (target 0.7-0.9ms)."""
 
     def test_d_e2e_under_1ms_at_phi3(self):
@@ -274,7 +287,7 @@ class TestGateP2:
         # Sanity assertions — should be roughly:
         # D_det 0.07 + D_tx ~0.3 + D_queue ~0.2 + D_fh 0.1 + D_bh 0.1 ≈ 0.7-0.9 ms
         assert mean_e2e_ms < 1.0, f"Gate P2 FAIL: mean D_e2e = {mean_e2e_ms:.3f}ms > 1ms"
-        assert env.queues["urllc_0"].is_stable, "URLLC queue unstable at φ₃"
+        assert env.queues["urllc_0"].is_stable, "URLLC queue unstable at severity-5"
         # Per-TTI violation rate should be low (allow up to 20% during warm-up)
         assert viol_rate < 0.30, f"viol_rate {viol_rate:.3f} too high"
         # PRB budget honored
