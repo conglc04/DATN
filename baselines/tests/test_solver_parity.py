@@ -64,7 +64,10 @@ def test_three_solvers_same_dims(K):
     lam_local = td3.lambda_state.get_lambda_local()
     s_L = overlay_lambda_local(env._observe(), lam_local, K)
     assert s_L.shape[0] == obs_dim
-    s_H = build_manager_state(env._observe(), td3.lambda_state.get_lambda_global())
+    s_H = build_manager_state(
+        env._observe(), td3.lambda_state.get_lambda_global(),
+        td3.lambda_state.get_deviation_hat(),
+    )
     assert s_H.shape[0] == sH_dim
     _ = ppo_worker  # bound for symmetry; PPO worker shares the same obs_dim
 

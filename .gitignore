@@ -20,5 +20,8 @@ figures/
 # Reference corpus (large static PDFs — kept locally, not in git)
 documents/
 
+# Local Claude Code tool settings (not project config)
+.claude/
+
 # OS
 .DS_Store

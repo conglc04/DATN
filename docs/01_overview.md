@@ -12,7 +12,7 @@ Tại Hà Nội (mật độ giao thông cao), **đa xe cứu thương** cùng t
 
 ## Giải pháp — Khung CMDP + 3 solver ngang hàng
 **Đóng góp = BÀI TOÁN tối ưu (khung CHUNG, KHÔNG gắn với 1 thuật toán)**. Các thành phần dựng nên bài toán:
-- **Severity-aware (trục ưu tiên chính)**: 5 mức **ATS — Australasian Triage Scale** (Non-urgent→Immediate; exogenous, **cố định/episode**, **KHÔNG vitals giả**) → chọn ngưỡng QoS (`SEVERITY_QOS`) + reward weight `α_e(sev)` + intra-slice priority/ordering (K≥2). Thay 5-pha cũ (xe luôn có bệnh nhân ⟹ pha vô nghĩa). Scene/transport (mobility) đã có trong `speed` obs.
+- **Severity-aware (trục ưu tiên chính)**: 5 mức **ATS — Australasian Triage Scale** (Non-urgent→Immediate; exogenous, **cố định/episode**, **KHÔNG vitals giả**) → chọn ngưỡng QoS (`SEVERITY_QOS`) + intra-slice priority/ordering (K≥2). Severity vào hệ **chỉ qua constraint C1–C5 + λ** (reward KHÔNG còn trọng số α_e — bỏ 2026-06-23). Thay 5-pha cũ (xe luôn có bệnh nhân ⟹ pha vô nghĩa). Scene/transport (mobility) đã có trong `speed` obs.
 - **CMDP-Lagrangian**: constraint qua dual ascent (`λ←clip(λ+α·g,0,Λ_max)`), KHÔNG soft penalty trong reward.
 - **Two-timescale Manager/Worker**: điều phối Manager (100ms) / Worker (10ms) — khung thời gian chung. **Cả 3 solver đều HRL Manager+Worker** (PPO→ManagerAgent on-policy; TD3→TD3ManagerAgent, SAC→SACManagerAgent off-policy) — khác biệt CHỈ ở RL core (on/off-policy + cadence update), KHÔNG ở bài toán/khung HRL.
 - **Structural safety**: closed-form feasibility projection (Option B floor + ordering by construction) — KHÔNG cần NN/QP.

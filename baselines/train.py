@@ -4,8 +4,10 @@
 (off-policy) run in `solvers/train_offpolicy.py`. All three solve the SAME problem
 with the SAME HRL framework — the only difference is the RL core. Shared (solver-
 agnostic) pieces, so the comparison is fair (no problem built for any one algorithm):
-    - Env / CMDP: reward `α_e·log(1+R_eMBB/R_REF)`, constraints c_vec/d_phi, and the
-      pure-RL softmax PRB split all live in `env/oran_env.py` (identical for every solver).
+    - Env / CMDP: reward `log(1+R_eMBB/R_REF)` (pure eMBB log-utility, NO α_e —
+      removed 2026-06-23; severity enters only via constraints C1–C5 + λ), constraints
+      c_vec/d_phi, and the pure-RL softmax PRB split all live in `env/oran_env.py`
+      (identical for every solver).
     - HRL Manager+Worker: PPO→ManagerAgent, TD3→TD3ManagerAgent, SAC→SACManagerAgent.
     - `LambdaState` (4K+1)-dim dual ascent, `overlay_lambda_local` (utils/obs.py),
       `build_manager_state`/`decode_manager_action`/`env.set_rrm_budget` (shared).
@@ -367,7 +369,10 @@ def train_ppo(
                 severity_per_amb_now = tuple(int(s) for s in info["severity_per_amb"])
                 lambda_state.on_manager_step_start(severity_per_amb_now, severity_ref_now)   # N9: sync BOTH λ_global + λ_local
 
-                s_H = build_manager_state(obs, lambda_state.get_lambda_global())
+                s_H = build_manager_state(
+                    obs, lambda_state.get_lambda_global(),
+                    lambda_state.get_deviation_hat(),
+                )
                 a_H_raw, log_prob_H, value_H = manager.act(s_H)
                 b_rrm = decode_manager_action(a_H_raw)["b_rrm"]
                 env.set_rrm_budget(b_rrm)
@@ -449,7 +454,10 @@ def train_ppo(
             else:
                 s_L_boot = overlay_lambda_local(obs, lambda_state.get_lambda_local(), K)
                 _, _, last_value_w = worker.act(s_L_boot, deterministic=True)
-                s_H_boot = build_manager_state(obs, lambda_state.get_lambda_global())
+                s_H_boot = build_manager_state(
+                    obs, lambda_state.get_lambda_global(),
+                    lambda_state.get_deviation_hat(),
+                )
                 _, _, last_value_h = manager.act(s_H_boot, deterministic=True)
 
             # ------------ PPO updates (MỖI ROLLOUT, env persist) ------------

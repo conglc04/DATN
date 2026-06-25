@@ -3,11 +3,15 @@
 Covers:
     - severity_per_amb sampled independently per ambulance, fixed for the episode
     - severity_ref = max(severity_per_amb) drives shared quantities
-    - K-dependent action space (1-dim K=1 no-op, (1+K)-dim K>=2 with β + per-vehicle logits)
-    - Intra-slice Π_feasible PRB split: K=1 numeric preservation
-    - Severity-ordering ⟹ PRB-allocation-ordering ⟹ delay-ordering (structural,
-      replaces the C6 Lagrangian-constraint formulation — now an algebraic
-      property of _prb_split_intra_slice + per-ambulance queues)
+    - K-dependent action space (1-dim K=1 no-op, K-dim K>=2 pure-RL logits — NO β
+      slot, gỡ 2026-06-21)
+    - Intra-slice pure-RL softmax PRB split (NO Π_feasible tier-rule): K=1 numeric
+      preservation
+    - Severity-ordering ⟹ PRB-allocation-ordering ⟹ delay-ordering is now an
+      EMPIRICAL/learned tendency (gradient-driven via λ_C1..C5 + r_aug), NOT a
+      structural/algebraic property — the severity-tier protection phase that used
+      to guarantee this was removed 2026-06-21 (see agents/worker_agent.py
+      "pure-RL intra-slice" docstring)
 """
 
 from __future__ import annotations
@@ -91,7 +95,7 @@ def test_macro_mission_samples_severity_per_reset():
 
 
 # ----------------------------------------------------------------------------
-# K-dependent action space (β priority temperature)
+# K-dependent action space (pure-RL, no β priority temperature)
 # ----------------------------------------------------------------------------
 
 
@@ -132,7 +136,7 @@ def test_action_is_logits_directly_no_beta_slot():
 
 
 # ----------------------------------------------------------------------------
-# Intra-slice Π_feasible PRB split — K=1 numeric preservation
+# Intra-slice pure-RL softmax PRB split — K=1 numeric preservation
 # ----------------------------------------------------------------------------
 
 

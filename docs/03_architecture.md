@@ -1,7 +1,7 @@
 # 03 — Architecture
 
 ## O-RAN topology (Near-RT RIC + O-DU)
-- **Manager (inter-slice, Near-RT 100ms)**: tối ưu budget inter-slice (r_min^URLLC, r_max^eMBB) + intra-slice temperature β.
+- **Manager (inter-slice, Near-RT 100ms)**: tối ưu budget inter-slice (r_min^URLLC, r_max^eMBB). Intra-slice temperature β **KHÔNG còn tồn tại** (pure-RL intra-slice gỡ β, 2026-06-21 — xem [05](05_agent_workflow.md)).
 - **Near-RT RIC (xApp / Worker)**: timescale 10ms; điều chỉnh RRMPolicyRatio + Lagrangian λ.
 - **O-DU/O-RU**: MAC TTI 0.5ms; thực thi PRB allocation.
 - Mapping action → **RRMPolicy{Min/Max/Dedicated}Ratio** (E2SM-CCC) ✅[3GPP TS 28.541].
@@ -15,7 +15,7 @@ Manager 100ms vs Worker 10ms cadence gap → bridge bằng **λ_warm** (severity
 - ⚠️ **KHÔNG** multi-cell N=20; **KHÔNG** Viettel hardware (Qualcomm X100/QRU100 — đã gỡ, không có data thật).
 
 ## Severity (exogenous — thay Phase FSM, swap 2026-06-14)
-Mỗi xe có **severity ∈ {1..5}** (ATS triage); `severity_per_amb` sampled độc lập per-ambulance, **cố định trong 1 episode**, random giữa các episode — **KHÔNG FSM/transition, KHÔNG explicit signaling, KHÔNG ML inference** (xe luôn có bệnh nhân ⟹ pha STANDBY/DISPATCH/RETURN vô nghĩa). `severity_ref := max(severity_per_amb)` chọn bộ QoS-tier **SHARED** (D_max, ε, R_min, AoI_max) + trọng số reward `α_eMBB`; `severity_per_amb[k]` chọn ngưỡng QoS **per-xe** (C1/C2/C4/C5) + thứ tự ưu tiên intra-slice (β/Π_feasible, K≥2) [02](02_requirements.md).
+Mỗi xe có **severity ∈ {1..5}** (ATS triage); `severity_per_amb` sampled độc lập per-ambulance, **cố định trong 1 episode**, random giữa các episode — **KHÔNG FSM/transition, KHÔNG explicit signaling, KHÔNG ML inference** (xe luôn có bệnh nhân ⟹ pha STANDBY/DISPATCH/RETURN vô nghĩa). `severity_ref := max(severity_per_amb)` chọn đại lượng **SHARED** (severity one-hot; C3 R_min cố định) — **reward KHÔNG còn α_e** (bỏ 2026-06-23; severity vào hệ chỉ qua constraint C1–C5 + λ); `severity_per_amb[k]` chọn ngưỡng QoS **per-xe** (C1/C2/C4/C5) + ưu tiên intra-slice **HỌC HOÀN TOÀN** qua per-vehicle softmax logits (pure-RL, K≥2 — KHÔNG còn β/Π_feasible tier-rule) [02](02_requirements.md).
 
 ## Channel model — UMa (3GPP TR 38.901), single-cell 1km
 - **Path-loss UMa** `pl_uma` ✅[TR 38.901 §7.4.1]; **shadow σ_SF** ✅[§7.4.1]. Sweep dùng `bs_layer="macro"` (`macro_mission_config`); scenario 300m micro/UMi LOS-NLOS = legacy default (unit-test).

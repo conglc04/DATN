@@ -34,7 +34,8 @@ from utils.config import (
     AOI_REF_S,
     ALPHA_LAMBDA_DUAL,
     B_PRB,
-    B_RRM_FLOOR_BY_SEV,
+    B_RRM_ANALYTICAL_MIN,
+    B_RRM_ANALYTICAL_MAX,
     B_RRM_MAX,
     B_RRM_MIN,
     BETA_MAX,
@@ -146,22 +147,15 @@ class TestPRBSplitConstants:
         # δ = ρ·β; severity term (β·0.8) dominates this tiebreaker
         assert RHO_URGENCY_TIEBREAK == pytest.approx(0.15)
 
-    def test_b_rrm_min(self):
-        # Global floor = min(B_RRM_FLOOR_BY_SEV): ambulance always > eMBB
-        assert B_RRM_MIN == pytest.approx(0.65)
-
-    def test_b_rrm_floor_by_sev(self):
-        # Severity-dependent floor: ambulance always prioritized, monotonic
-        expected = {1: 0.65, 2: 0.70, 3: 0.75, 4: 0.80, 5: 0.85}
-        assert B_RRM_FLOOR_BY_SEV == expected
-        floors = [B_RRM_FLOOR_BY_SEV[s] for s in range(1, 6)]
-        assert floors == sorted(floors), "Floor must be monotonically increasing"
-        assert all(f > 0.50 for f in floors), "URLLC must always > 50%"
-        assert B_RRM_MIN == pytest.approx(min(floors))
-
-    def test_b_rrm_max(self):
-        # Upper bound: leaves ≥15% PRBs for eMBB
-        assert B_RRM_MAX == pytest.approx(0.85)
+    def test_b_rrm_analytical_bounds(self):
+        # Analytical initial bounds (not proven feasibility bounds).
+        # B_MIN = service floor, B_MAX = C3 cap — both from physics.
+        # No per-severity hard floor; severity via constraints only.
+        assert B_RRM_ANALYTICAL_MIN == pytest.approx(0.05)
+        assert B_RRM_ANALYTICAL_MAX == pytest.approx(0.86)
+        assert B_RRM_MIN == B_RRM_ANALYTICAL_MIN
+        assert B_RRM_MAX == B_RRM_ANALYTICAL_MAX
+        assert B_RRM_MIN < B_RRM_MAX
 
 
 # ---------------------------------------------------------------------------

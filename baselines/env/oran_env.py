@@ -81,7 +81,6 @@ from utils.config import (
     AMB_SINR_OFFSET,
     AMB_SPEED_OFFSET,
     B_PRB,
-    B_RRM_FLOOR_BY_SEV,
     B_RRM_MAX,
     B_RRM_MIN,
     BETA_MAX,
@@ -126,7 +125,6 @@ from utils.config import (
     DEST_LAT,
     DEST_LON,
     build_d_phi_vector,
-    get_severity_alpha,
 )
 
 
@@ -199,7 +197,7 @@ class EnvConfig:
     # Severity_k epic (2026-06-15): each of the K ambulances carries an
     # INDEPENDENT severity_k in {1..5}, sampled independently and fixed for the
     # episode (severity_per_amb). severity_ref := max(severity_per_amb) drives
-    # all SHARED quantities (alpha_e reward weight, C3 R_min, severity one-hot,
+    # all SHARED quantities (C3 R_min, severity one-hot,
     # info["severity"]). For training diversity, set sample_severity=True to
     # draw a fresh independent level per ambulance each reset() from
     # severity_sample_weights. When False, every ambulance uses initial_severity
@@ -283,8 +281,11 @@ class EnvConfig:
     traffic_density: str = "medium"         # {"light", "medium", "heavy"}
 
     # ---- Phase 2.1 reward (W05 refactor + post-critique restructure W12) ---
-    # Reward is eMBB log-utility ONLY (single-term objective):
-    #   r = α_e(sev) · U_eMBB(t),  U_eMBB = log(1 + R_eMBB / R_REF_EMBB_MBPS)
+    # Reward is eMBB log-utility ONLY (single-term objective), NO α_e weight:
+    #   r = U_eMBB(t),  U_eMBB = log(1 + R_eMBB / R_REF_EMBB_MBPS)
+    # α_e(sev) severity-weighting REMOVED 2026-06-23 — severity enters the system
+    # ONLY via constraints C1–C5 + λ dual ascent, never via reward weighting
+    # (sev5 had α_e=0.05 → reward ≈ 0, killing the Manager's gradient signal).
     # URLLC enforced via Lagrangian C1, C2 (LambdaState), NOT via reward penalty.
     # Pre-restructure form r = -α_U · L_URLLC + α_e · U_eMBB caused double-counting
     # with λ_1, λ_2 (W11 audit found λ_1, λ_2 stagnated). L_URLLC retained in info
@@ -603,7 +604,7 @@ class ORANEnv(gym.Env):
         #      (if sample_severity)
         #   4) config.initial_severity (broadcast to all K)
         # severity_ref := max(severity_per_amb) drives all SHARED quantities
-        # (alpha_e reward weight, C3 R_min, severity one-hot, info["severity"]).
+        # (C3 R_min, severity one-hot, info["severity"]).
         # At K=1 this reduces exactly to the legacy scalar severity.
         if options and "severity_per_amb" in options:
             severity_per_amb = np.asarray(options["severity_per_amb"], dtype=np.int64)
@@ -732,6 +733,14 @@ class ORANEnv(gym.Env):
         self._aoi_pkt_failed_bler = np.zeros(K, dtype=np.int64)
         self._aoi_pkt_failed_no_prb = np.zeros(K, dtype=np.int64)
         self._aoi_pkt_failed_no_capacity = np.zeros(K, dtype=np.int64)
+        # Raw C2/C5 counters — violation_count / sample_count per ambulance.
+        # C2: MAC ticks where PK-expected D_e2e > D_max (queue-state proxy).
+        # C5: MAC ticks where current AoI > AoI_max (true observation).
+        # Only active ticks are counted (inactive → excluded).
+        self._c2_violation_count = np.zeros(K, dtype=np.int64)
+        self._c2_sample_count = np.zeros(K, dtype=np.int64)
+        self._c5_violation_count = np.zeros(K, dtype=np.int64)
+        self._c5_sample_count = np.zeros(K, dtype=np.int64)
         # C-fix (audit 2026-06-22): RLC-style cross-TTI service-bit accumulator.
         # A URLLC packet may span multiple TTIs when one TTI's transport block is
         # smaller than the packet (low SINR / few PRB). Without accumulation the
@@ -786,7 +795,14 @@ class ORANEnv(gym.Env):
 
         xApp decides only intra-URLLC priority at start of step; the inter-slice
         URLLC/eMBB budget is the latest Manager setpoint. O-DU MAC executes that
-        schedule for 20 TTI internal ticks. Reward is the sum of per-TTI rewards.
+        schedule for 20 TTI internal ticks. Reward is the MEAN of per-TTI rewards.
+
+        Reward = MEAN (not SUM) over MAC ticks: the constraint c_vec is a per-tick
+        MEAN (delay rate, violation rate, AoI), so reward must share the same
+        temporal basis for the augmented Lagrangian r − Σλⱼ·gⱼ to be balanced.
+        SUM-vs-MEAN mismatch (×20) made the eMBB reward gradient swamp the
+        constraint penalty → Manager starved URLLC (audit 2026-06-23, see
+        docs/OPTIMIZATION_PROBLEM_FINAL §reward).
 
         Returns observation aggregated AT END of Worker step (post 20 ticks).
         See docs/13_methodology_walkthrough.md Phase 1.4 for full hierarchy.
@@ -806,12 +822,16 @@ class ORANEnv(gym.Env):
         self._worker_tick_count = 0
         self._worker_active_count = np.zeros(K, dtype=np.float64)
 
-        # 2. Run MAC_TICKS_PER_WORKER (=20) internal MAC ticks with same action
+        # 2. Run MAC_TICKS_PER_WORKER (=20) internal MAC ticks with same action.
+        #    Reward = MEAN over executed ticks (temporal-basis match with c_vec mean).
         reward_accumulated = 0.0
+        n_reward_ticks = 0
         for _ in range(MAC_TICKS_PER_WORKER):
             reward_accumulated += self._mac_tick()
+            n_reward_ticks += 1
             if self.tti_idx >= self._max_tti_for_episode():
                 break  # episode truncated mid-Worker-step (rare)
+        reward_accumulated /= max(n_reward_ticks, 1)   # SUM → MEAN
 
         # 3. Aggregate c_vec across MAC ticks → mean per-step constraint signal ((4K+1)-dim).
         # C1/C2/C4/C5: normalize per ambulance by its own active-sample count so a
@@ -859,6 +879,14 @@ class ORANEnv(gym.Env):
         # Queue evolution → D_e2e for each ambulance's URLLC stream this TTI.
         # Per-ambulance C1/C2 violation thresholds use severity_per_amb[k]
         # (each ambulance held to its OWN severity's QoS budget — B5 epic).
+        #
+        # LIMITATION (C2 semantic proxy): d_e2e_per_amb is the M/G/1 PK
+        # EXPECTED queue delay — a queue-state metric, NOT an observed
+        # per-packet delay. The true chance constraint P(D_packet > D_max)
+        # requires packet-level delay samples, which are unavailable in this
+        # analytical simulation (M/G/1 PK). The proxy P(E[D_state] > D_max)
+        # is monotonically correlated but not equivalent at the boundary.
+        # For packet-level fidelity, use ns-3 (future work, docs/01).
         K = self.config.K_ambulances
         d_e2e_per_amb = self._compute_e2e_delay_per_amb()
         d_max_phi_per_amb = np.array(
@@ -879,8 +907,11 @@ class ORANEnv(gym.Env):
         self.last_bler_per_amb = self._sample_bler_per_amb()
 
         # eMBB throughput (Mbps) — capacity-limited when queue unstable.
-        # SHARED C3 quantity: R_min floor + alpha_e keyed by severity_ref
-        # (= max(severity_per_amb)), per locked design decision.
+        # SHARED C3 quantity: R_min is a FIXED, severity-INDEPENDENT floor
+        # (10 Mbps at every severity — CMDP_D_J_SEVERITY[*]["d3_embb_mbps"]).
+        # sev_ref (= max(severity_per_amb)) below is only the TABLE LOOKUP
+        # KEY, not a value-driver — kept so C3 shares one per-severity table
+        # shape with C1/C2/C4/C5 (which DO genuinely vary by severity).
         sev_ref = self.severity
         self.last_embb_mbps = self._compute_embb_throughput_mbps()
         r_min_embb_phi = float(CMDP_D_J_SEVERITY[sev_ref]["d3_embb_mbps"])
@@ -888,19 +919,17 @@ class ORANEnv(gym.Env):
         embb_deficit_mbps = max(0.0, embb_gap_mbps)
         c3_viol = embb_gap_mbps > 0.0
 
-        # ---------------- Phase 2.1 Restructured Reward (post-critique, docs/13 §2.1) ----------------
-        # r_t = α_e(sev_ref) · U_eMBB(t)   (eMBB log-utility ONLY)
-        #   U_eMBB = log(1 + R_eMBB / R_REF_EMBB_MBPS)   (bounded, R_REF = 100 Mbps)
-        # URLLC enforced via Lagrangian C1, C2 in LambdaState — NOT in reward.
-        # Removes double-counting with λ_1, λ_2 that caused dual stagnation (W11 audit).
-        # Single-term reward: only α_eMBB is used. α_URLLC is intentionally NOT
-        # applied to the reward (URLLC enforced via Lagrangian λ_1, λ_2). The
-        # urllc weight is ignored here by design (post-restructure 2026-05-26).
-        _, alpha_e = get_severity_alpha(sev_ref)
-        l_urllc = d_e2e / D_REF_URLLC                       # diagnostics only, exported via info dict
+        # ---------------- Reward: pure eMBB log-utility (no α_e) ----------------
+        # r_t = log(1 + R_eMBB / R_REF)
+        # Severity differentiation is ENTIRELY via constraints C1–C5 + λ dual
+        # ascent — NOT via reward weighting. Removing α_e(sev) eliminates the
+        # double-count: constraints already force higher b_rrm at high severity
+        # (large penalty if QoS violated), so α_e was redundant and obscured
+        # the Manager's gradient signal (sev=5 had α_e=0.05 → reward ≈ 0).
+        l_urllc = d_e2e / D_REF_URLLC                       # diagnostics only
         self._last_l_urllc = float(l_urllc)
         u_embb = math.log(1.0 + self.last_embb_mbps / R_REF_EMBB_MBPS)
-        reward = alpha_e * u_embb
+        reward = u_embb
 
         # ---------------- AoI tracking for C4, C5 (Worker-step aggregation) ----------------
         # Single consolidated per-ambulance AoI stream (F=1, LCFS+drop_old per docs/04),
@@ -958,6 +987,12 @@ class ORANEnv(gym.Env):
             self._worker_c_accum[K:2 * K] += viol_per_amb.astype(np.float64) * am
             self._worker_c_accum[2 * K:3 * K] += aoi_per_amb * am
             self._worker_c_accum[3 * K:4 * K] += aoi_viol_per_amb.astype(np.float64) * am
+            # Raw C2/C5 counters (active ticks only)
+            active_int = self.active_mask.astype(np.int64)
+            self._c2_sample_count += active_int
+            self._c2_violation_count += (viol_per_amb & self.active_mask).astype(np.int64)
+            self._c5_sample_count += active_int
+            self._c5_violation_count += (aoi_viol_per_amb & self.active_mask).astype(np.int64)
         self._worker_c_accum[4 * K] += embb_gap_mbps   # C3: slice-level, never masked
         self._worker_tick_count += 1
 
@@ -1016,14 +1051,13 @@ class ORANEnv(gym.Env):
     def set_rrm_budget(self, b_rrm: float) -> None:
         """Re-anchor r_min_urllc to Manager setpoint at the start of a Manager window.
 
-        Three-tier clipping:
-          1. [B_RRM_MIN, B_RRM_MAX] — guaranteed by decode_manager_action upstream.
-          2. B_RRM_FLOOR_BY_SEV[severity_ref] — ambulance-priority floor (monotonic).
-          3. [feasible_rrm_floor, feasible_rrm_cap] — computed at reset() per K/QoS.
+        Two-tier clipping (no hard severity floor — severity differentiation
+        is entirely via constraints C1–C5 + λ dual ascent):
+          1. [B_RRM_MIN, B_RRM_MAX] — analytical bounds from decode_manager_action.
+          2. [feasible_rrm_floor, feasible_rrm_cap] — computed at reset() per K/QoS.
         The tighter of all bounds applies.  Must be called BEFORE the Worker loop.
         """
-        sev_floor = B_RRM_FLOOR_BY_SEV.get(self.severity, B_RRM_MIN)
-        lo = max(B_RRM_MIN, sev_floor, self._feasible_rrm_floor)
+        lo = max(B_RRM_MIN, self._feasible_rrm_floor)
         hi = min(B_RRM_MAX, self._feasible_rrm_cap)
         hi = max(hi, lo)   # safety: ensure hi ≥ lo
         clipped = float(np.clip(b_rrm, lo, hi))
@@ -1165,7 +1199,22 @@ class ORANEnv(gym.Env):
 
         The Worker neural network outputs per-ambulance logits ℓ_k
         (action[0:K] for K≥2). softmax(ℓ) produces weights w_k.
-        PRB_k = round(w_k × B_U).
+
+        Reserve-first split (audit 2026-06-24, fixes a floor violation):
+          1. Reserve PRB_MIN_QOS for every active ambulance FIRST:
+             reserved = K_active × PRB_MIN_QOS.
+          2. Split only the remainder (B_U − reserved) by softmax weight,
+             largest-remainder integer projection.
+          3. PRB_k = PRB_MIN_QOS + remainder_share_k.
+        This guarantees PRB_k >= PRB_MIN_QOS for every active k by
+        construction. The prior order (floor the full-budget proportional
+        split → force each entry up to the minimum → rescale down on
+        overflow) could zero out an ambulance when one softmax weight
+        dominated extremely — e.g. raw logits [10,-5,-5] with B_U=27 gave
+        [26,1,0], violating the floor for the third ambulance.
+        Feasibility precondition: B_U >= K_active × PRB_MIN_QOS — holds with
+        wide margin under current bounds (B_RRM_MIN=0.05 → B_U>=13 PRBs vs
+        K_active<=3 → reserved<=3 PRBs); raises if a future config breaks it.
 
         NO hard-coded severity ordering.
         NO N_req formula.
@@ -1194,21 +1243,29 @@ class ORANEnv(gym.Env):
             prb_out[active_idx[0]] = B_U
             return prb_out
 
-        # --- Pure softmax: policy logits → weights → PRBs ---
+        # --- Reserve PRB_MIN_QOS for every active ambulance FIRST ---
+        reserved = K_active * PRB_MIN_QOS
+        if B_U < reserved:
+            raise ValueError(
+                f"Infeasible URLLC PRB split: B_U={B_U} < K_active={K_active} "
+                f"* PRB_MIN_QOS={PRB_MIN_QOS} (reserved={reserved}). "
+                "B_RRM_MIN / K_ambulances must guarantee "
+                "B_U >= K_active * PRB_MIN_QOS."
+            )
+        remaining = B_U - reserved
+
+        # --- Pure softmax over the remaining budget only ---
         w = _softmax(self._prb_weights[active_idx])
 
-        # --- Largest-remainder integer allocation ---
-        allocs = np.floor(B_U * w).astype(np.int64)
-        allocs = np.maximum(allocs, PRB_MIN_QOS)
-        if int(allocs.sum()) > B_U:
-            allocs = np.maximum(
-                B_U * allocs // max(int(allocs.sum()), 1), 0
-            ).astype(np.int64)
-        rem = B_U - int(allocs.sum())
+        # --- Largest-remainder integer allocation of the remainder ---
+        extra = np.floor(remaining * w).astype(np.int64)
+        rem = remaining - int(extra.sum())
         if rem > 0:
-            fracs = B_U * w - allocs.astype(float)
+            fracs = remaining * w - extra.astype(float)
             for i in np.argsort(-fracs)[:rem]:
-                allocs[i] += 1
+                extra[i] += 1
+
+        allocs = np.full(K_active, PRB_MIN_QOS, dtype=np.int64) + extra
 
         prb_out = np.zeros(K, dtype=np.int64)
         for i, k in enumerate(active_idx):
@@ -1611,7 +1668,7 @@ class ORANEnv(gym.Env):
             "tti": self.tti_idx,
             "sim_time": self.sim_time,
             # severity = severity_ref = max(severity_per_amb), drives SHARED
-            # quantities (alpha_e reward weight, C3 R_min, fixed-block one-hot).
+            # quantities (C3 R_min, fixed-block one-hot).
             "severity": self.severity,
             "severity_name": SEVERITY_QOS[self.severity]["name"],
             # severity_per_amb[k] = independent severity_k in {1..5}, fixed for
@@ -1639,7 +1696,7 @@ class ORANEnv(gym.Env):
             "d_phi": self._last_d_phi.copy(),
             # Phase 2.1 reward restructure (post-critique W12): URLLC mean delay
             # exported for diagnostics — NOT used in reward computation. Reward is
-            # alpha_e * log1p(R_eMBB/R_REF) only; URLLC enforced via λ_1, λ_2.
+            # log(1 + R_eMBB/R_REF) pure utility; URLLC enforced via λ_1, λ_2.
             "l_urllc_mean": float(self._last_l_urllc),
             # Reviewer M2 (internal review, W02, 2026-05-27): expose M/G/1 queue diagnostics
             # so reviewers can audit Pollaczek-Khinchine formula application.
@@ -1668,6 +1725,13 @@ class ORANEnv(gym.Env):
             "aoi_pkt_failed_bler": self._aoi_pkt_failed_bler.copy(),
             "aoi_pkt_failed_no_prb": self._aoi_pkt_failed_no_prb.copy(),
             "aoi_pkt_failed_no_capacity": self._aoi_pkt_failed_no_capacity.copy(),
+            # Raw C2/C5 counters — for sweep/audit (violation_count / sample_count).
+            # C2 limitation: uses PK-expected delay (queue-state proxy), not
+            # per-packet delay — inherent to analytical M/G/1 simulation.
+            "c2_violation_count": self._c2_violation_count.copy(),
+            "c2_sample_count": self._c2_sample_count.copy(),
+            "c5_violation_count": self._c5_violation_count.copy(),
+            "c5_sample_count": self._c5_sample_count.copy(),
             # F1: per-ambulance lifecycle (masks in info only; obs sentinel-zeroed above).
             "active_mask": self.active_mask.copy(),
             "arrived_mask": self.arrived_mask.copy(),

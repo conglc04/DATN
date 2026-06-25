@@ -20,6 +20,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
+import pytest
 
 from env.oran_env import EnvConfig, ORANEnv
 from utils import config as cfg
@@ -215,11 +216,11 @@ def test_observation_no_duplicate_q_bug():
 
 
 def test_reward_is_embb_log_utility_only():
-    """Reward = alpha_e(phi) * log1p(R_eMBB / R_REF_EMBB_MBPS) ONLY (post-critique restructure).
+    """Reward = log(1 + R_eMBB / R_REF) — pure eMBB utility, no α_e.
 
-    URLLC enforced via Lagrangian C1, C2 in LambdaState — NOT in reward.
-    Reward must be non-negative single-term. Uses severity 5 (alpha_e=0.05, the
-    most eMBB-deprioritized level) to keep per-step magnitude small.
+    Severity differentiation is entirely via constraints C1–C5 + λ.
+    Reward must be non-negative (log(1+x) ≥ 0 for x ≥ 0).
+    Summed over 20 MAC ticks per Worker step.
     """
     env = ORANEnv(config=EnvConfig(initial_severity=5), seed=0)
     env.reset(seed=0)
@@ -228,12 +229,11 @@ def test_reward_is_embb_log_utility_only():
         _, r, _, _, _ = env.step(env.action_space.sample())
         rewards.append(r)
     assert all(math.isfinite(r) for r in rewards), "non-finite reward"
-    # Single-term alpha_e * log1p(R/R_REF) is non-negative (log1p >= 0 for R >= 0; alpha_e > 0)
     assert all(r >= -1e-9 for r in rewards), (
-        f"reward must be >= 0 (single-term eMBB log-utility); got {rewards}"
+        f"reward must be >= 0 (pure eMBB log-utility); got {rewards}"
     )
-    # Bounded above: alpha_e_max=0.7 * log(1 + R_max/100) — even at R=2 Gbps → log(21) ~ 3.04 → r ~ 2.1
-    assert all(r < 10.0 for r in rewards), f"reward unexpectedly large: {rewards}"
+    # 20 ticks × log(1 + R/100): at R=300 Mbps → log(4)≈1.39 × 20 ≈ 27.7
+    assert all(r < 40.0 for r in rewards), f"reward unexpectedly large: {rewards}"
 
 
 def test_info_exports_l_urllc_for_diagnostics():
@@ -245,24 +245,27 @@ def test_info_exports_l_urllc_for_diagnostics():
     assert info["l_urllc_mean"] >= 0.0, "l_urllc_mean must be non-negative"
 
 
-def test_reward_nonurgent_higher_than_immediate_due_to_alpha_embb():
-    """NON_URGENT has alpha_e=0.70 vs IMMEDIATE alpha_e=0.05 → larger reward for same R_eMBB.
+def test_reward_invariant_to_severity_no_alpha_e():
+    """Reward is INVARIANT to severity at identical dynamics (α_e removed 2026-06-23).
 
-    Single-term reward r = alpha_e(sev) * log(1 + R/R_REF); severity does not change
-    channel/traffic dynamics, so R_eMBB is identical and the ratio is alpha_e(1)/alpha_e(5)=14.
+    The reward is pure eMBB log-utility r = mean_tick log(1 + R/R_REF) with NO
+    severity weight. Severity does not change channel/traffic dynamics, so with
+    the same seed the per-step reward at sev=1 must EQUAL that at sev=5 — severity
+    differentiation lives entirely in the constraints C1–C5 + λ, not the reward.
+    (Regression guard: if α_e leaks back in, sev=1 reward would be 14× sev=5.)
     """
-    env1 = ORANEnv(config=EnvConfig(initial_severity=1), seed=0)
+    env1 = ORANEnv(config=EnvConfig(initial_severity=1, sample_severity=False), seed=0)
     env1.reset(seed=0)
-    r1_total = sum(env1.step(env1.action_space.sample())[1] for _ in range(20))
+    env1.set_rrm_budget(0.20)
+    r1 = env1.step(np.zeros(env1.action_space.shape[0], dtype=np.float32))[1]
 
-    env5 = ORANEnv(config=EnvConfig(initial_severity=5), seed=0)
+    env5 = ORANEnv(config=EnvConfig(initial_severity=5, sample_severity=False), seed=0)
     env5.reset(seed=0)
-    r5_total = sum(env5.step(env5.action_space.sample())[1] for _ in range(20))
+    env5.set_rrm_budget(0.20)
+    r5 = env5.step(np.zeros(env5.action_space.shape[0], dtype=np.float32))[1]
 
-    # NON_URGENT (alpha_e=0.70) cumulative reward must exceed IMMEDIATE (alpha_e=0.05).
-    assert r1_total >= r5_total, (
-        f"NON_URGENT (alpha_e=0.70) reward {r1_total} should be >= "
-        f"IMMEDIATE (alpha_e=0.05) reward {r5_total}"
+    assert r1 == pytest.approx(r5, rel=1e-9), (
+        f"reward differs by severity (sev1={r1}, sev5={r5}) — α_e leaked back in"
     )
 
 

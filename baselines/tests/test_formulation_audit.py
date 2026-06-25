@@ -52,7 +52,8 @@ from utils.config import (
 #   C1 = mean delay (s);  C2 = delay-tail frac;  C4 = mean AoI (s);
 #   C5 = AoI-tail frac;   C3 = signed eMBB gap (Mbps) = R_min - R_eMBB
 # d_phi (K=1):   [D_max, eps, AoI_max, eps_aoi, 0]
-# scale (K=1):   [D_REF_URLLC, 1, AOI_REF_S, 1, R_REF_EMBB_MBPS]
+# scale (K=1):   per-severity [D_max^sev, 1, AoI_max^sev, 1, R_REF_EMBB_MBPS]
+#   (audit 2026-06-24 ĐX2: was fixed D_REF_URLLC; now per-severity via build_dual_scales(K, sev))
 
 
 class TestGate2SignAndSubtraction:
@@ -73,12 +74,14 @@ class TestGate2SignAndSubtraction:
         assert d[4] == 0.0                            # C3 threshold is 0 (gap form)
 
     def test_dual_scales_layout(self):
-        s = build_dual_scales(1)
-        assert s[0] == pytest.approx(D_REF_URLLC)
-        assert s[1] == pytest.approx(1.0)
-        assert s[2] == pytest.approx(AOI_REF_S)
-        assert s[3] == pytest.approx(1.0)
-        assert s[4] == pytest.approx(R_REF_EMBB_MBPS)
+        # Per-severity (ĐX2): C1=D_max^sev, C4=AoI_max^sev; C2/C5=1.0; C3=R_REF.
+        s = build_dual_scales(1, [self.SEV])
+        q = SEVERITY_QOS[self.SEV]
+        assert s[0] == pytest.approx(q["D_max"])           # C1 = D_max^sev
+        assert s[1] == pytest.approx(1.0)                  # C2 (probability)
+        assert s[2] == pytest.approx(q["AoI_max"])         # C4 = AoI_max^sev
+        assert s[3] == pytest.approx(1.0)                  # C5 (probability)
+        assert s[4] == pytest.approx(R_REF_EMBB_MBPS)     # C3 (Mbps)
 
     def test_c_vec_is_raw_cost_not_deviation(self):
         """c_vec carries raw cost; deviation is computed as (c-d)/scale."""
@@ -87,7 +90,7 @@ class TestGate2SignAndSubtraction:
         # A reaching state: every raw cost strictly below its threshold.
         c = np.array([0.5e-3, 0.0, 0.10, 0.0, 20.0 - 200.0], dtype=np.float64)
         dev = ls._normalized_deviation(c, d)
-        scale = build_dual_scales(1)
+        scale = build_dual_scales(1, [self.SEV])
         expected = (c - d) / scale
         np.testing.assert_allclose(dev, expected, rtol=0, atol=1e-12)
 
@@ -116,7 +119,7 @@ class TestGate2SignAndSubtraction:
         c = np.array([10e-3, 1.0, 0.50, 1.0, 15.0], dtype=np.float64)
         lam = np.array([0.3, 0.4, 0.5, 0.6, 0.7], dtype=np.float64)
         ls.lambda_local = lam.copy()
-        scale = build_dual_scales(1)
+        scale = build_dual_scales(1, [self.SEV])
         r = 2.0
 
         got = ls.augmented_reward(r, c, d)
@@ -133,7 +136,7 @@ class TestGate2SignAndSubtraction:
         ls = self._ls()
         d = build_d_phi_vector([self.SEV])
         c = np.array([10e-3, 1.0, 0.50, 1.0, 15.0], dtype=np.float64)
-        scale = build_dual_scales(1)
+        scale = build_dual_scales(1, [self.SEV])
         ls.accumulate(c, d)
         np.testing.assert_allclose(ls.win_c, (c - d) / scale, atol=1e-12)
 
@@ -245,7 +248,7 @@ class TestGate4UpdateOrder:
         d = build_d_phi_vector([self.SEV])
         c = d.copy()
         c[0] += 0.01  # sustained C1 violation
-        scale = build_dual_scales(1)
+        scale = build_dual_scales(1, [self.SEV])
 
         # Score the step with the CURRENT (pre-update) lambda
         r_aug = ls.augmented_reward(1.0, c, d)
@@ -528,7 +531,7 @@ class TestGate11Mutations:
 
     def _ctx(self):
         d = build_d_phi_vector([self.SEV])
-        scale = build_dual_scales(1)
+        scale = build_dual_scales(1, [self.SEV])
         c = np.array([10e-3, 1.0, 0.50, 1.0, 15.0], dtype=np.float64)  # violating
         lam = np.array([0.3, 0.4, 0.5, 0.6, 0.7], dtype=np.float64)
         return c, d, scale, lam

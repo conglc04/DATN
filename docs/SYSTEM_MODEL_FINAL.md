@@ -42,5 +42,5 @@
 ## 5. Hierarchy (Manager / Worker)
 
 - **Manager** is the SOLE controller of inter-slice budget: `b_rrm = B_MIN + (B_MAX−B_MIN)·σ(a_H)`, `[B_MIN,B_MAX]=[0.05,0.85]`; `B_URLLC + B_eMBB = 273` exactly; new action every 100 ms; no other path writes `b_rrm` (locked, `m05`).
-- **Worker (xApp)** splits `B_URLLC` among active ambulances only: K=1 → 1-dim no-op; K≥2 → `(1+K)`-dim `(β, w₀..w_{K−1})`. Worker **cannot** touch `b_rrm`/inter-slice. `Σ_k B_k = B_URLLC`, inactive → 0 PRB (locked, `m06/m17`).
+- **Worker (xApp)** splits `B_URLLC` among active ambulances only: K=1 → 1-dim no-op; K≥2 → **`K`-dim** `(ℓ_0..ℓ_{K−1})` (pure-RL, audit 2026-06-21 — NO β slot, was `(1+K)`-dim `(β, w₀..w_{K−1})`) → `softmax(ℓ)→w_k→PRB_k`. Worker **cannot** touch `b_rrm`/inter-slice. `Σ_k B_k = B_URLLC`, inactive → 0 PRB (locked, `m06/m17`).
 - Two-tier safety clip: `b_rrm` clipped to `[max(B_MIN, feasible_floor), min(B_MAX, feasible_cap)]`; `feasible_cap` is derived from the C3 eMBB floor (`oran_env.py:652`), so eMBB is structurally protected at SINR ≥ 0 dB (see OPTIMIZATION_PROBLEM_FINAL §C3).

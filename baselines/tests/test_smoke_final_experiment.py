@@ -44,6 +44,7 @@ def _run_smoke_train(baseline: str, K: int, tmp_path, hard: bool = True, seed: i
         n_episodes=N_EPISODES,
         seed=seed,
         log_dir=str(tmp_path / f"{baseline}_K{K}"),
+        checkpoint_dir=str(tmp_path / f"{baseline}_K{K}" / "checkpoints"),
         K_ambulances=K,
         hard_mission=hard,
         initial_severity=5,
@@ -61,6 +62,7 @@ def _run_ppo(K: int, tmp_path, hard: bool = True, seed: int = 0):
         K_ambulances=K,
         hard_mission=hard,
         log_dir=str(tmp_path / f"ppo_K{K}"),
+        checkpoint_dir=str(tmp_path / f"ppo_K{K}" / "checkpoints"),
         print_every=PRINT_EVERY,
         checkpoint_every=0,
     )

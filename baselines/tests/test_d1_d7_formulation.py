@@ -1,6 +1,7 @@
 """Commit 4 verification: D1-D7 formulation/design risk classifications.
 
-D1: Reward summed (20 ticks) vs constraints meaned — expected behavior (class 4).
+D1: Reward MEANED (20 ticks) to match constraint MEAN — FIXED 2026-06-23 (was
+    SUM, the starvation root cause; see test_reward_constraint_scale_coupling).
 D2: C2/C5 thresholds below per-window resolution — expected behavior (class 4).
 D3: Manager obs missing delay/HOL/slack — design weakness (class 3).
 D4: Early stopping uses raw episode reward — design weakness (class 3).
@@ -20,6 +21,8 @@ from agents.ppo_core import entropy_bonus
 from agents.worker_agent import WorkerAgent
 from solvers._common import build_manager_state
 from utils.config import (
+    AMB_ACTIVE_OFFSET,
+    AMB_SEVERITY_NORM_OFFSET,
     LAMBDA_WARM,
     MAC_TICKS_PER_WORKER,
     OBS_AOI_MAX_IDX,
@@ -43,9 +46,10 @@ from utils.early_stopping import EarlyStopping
 # ────────────────────────────────────────────────────────────────────
 
 
-class TestD1RewardSumConstraintMean:
-    def test_reward_accumulates_over_mac_ticks(self):
-        """Reward per Worker step = sum of MAC_TICKS_PER_WORKER individual rewards."""
+class TestD1RewardMeanConstraintMean:
+    def test_reward_means_over_mac_ticks(self):
+        """Reward per Worker step = MEAN of MAC_TICKS_PER_WORKER rewards (matched
+        basis with the MEAN c_vec — augmented Lagrangian balanced)."""
         assert MAC_TICKS_PER_WORKER == 20
 
     def test_augmented_reward_uses_mean_constraint(self):
@@ -111,34 +115,45 @@ class TestD2ThresholdResolution:
 
 class TestD3ManagerObsSignals:
     def test_manager_state_dim_k1(self):
-        """K=1: Manager state = 6 fixed + 5 lambda = 11 dim."""
+        """K=1: Manager state = 8 fixed + λ_global(5) + g_hat(5) = 18 dim."""
         from agents.manager_agent import manager_state_dim
-        assert manager_state_dim(1) == 11
+        assert manager_state_dim(1) == 18
 
     def test_manager_state_dim_k3(self):
-        """K=3: Manager state = 6 fixed + 13 lambda = 19 dim."""
+        """K=3: Manager state = 8 fixed + λ_global(13) + g_hat(13) = 34 dim."""
         from agents.manager_agent import manager_state_dim
-        assert manager_state_dim(3) == 19
+        assert manager_state_dim(3) == 34
 
     def test_build_manager_state_extracts_correct_fields(self):
-        """Manager state includes rho, bler, severity, aoi, and lambda."""
+        """Manager state includes rho, bler, severity (ref+mean), n_active, aoi,
+        λ_global, and the current g_hat residual (audit 2026-06-23)."""
         obs = np.zeros(OBS_FIXED_BLOCK_LEN + OBS_PER_AMB_BLOCK_LEN + 1, dtype=np.float32)
         obs[OBS_RHO_URLLC_IDX] = 0.7
         obs[OBS_RHO_EMBB_IDX] = 0.3
         obs[OBS_BLER_IDX] = 0.05
-        obs[OBS_SEVERITY_OH_IDX + 2] = 1.0
+        obs[OBS_SEVERITY_OH_IDX + 2] = 1.0   # severity_ref = 3 → 3/5
         obs[OBS_AOI_MEAN_IDX] = 0.15
         obs[OBS_AOI_MAX_IDX] = 0.25
+        # One active ambulance (K=1) with severity_norm = 0.6 → severity_mean = 0.6,
+        # n_active = 1/1 = 1.0.
+        obs[OBS_FIXED_BLOCK_LEN + AMB_ACTIVE_OFFSET] = 1.0
+        obs[OBS_FIXED_BLOCK_LEN + AMB_SEVERITY_NORM_OFFSET] = 0.6
         lam = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-        s_H = build_manager_state(obs, lam)
-        assert s_H.shape == (11,)
-        assert abs(s_H[0] - 0.7) < 1e-5
-        assert abs(s_H[1] - 0.3) < 1e-5
-        assert abs(s_H[2] - 0.05) < 1e-5
-        assert abs(s_H[3] - 3.0 / 5.0) < 1e-5
-        assert abs(s_H[4] - 0.15) < 1e-5
-        assert abs(s_H[5] - 0.25) < 1e-5
-        np.testing.assert_array_almost_equal(s_H[6:], lam)
+        g_hat = np.array([-0.1, 0.2, -0.3, 0.4, -0.5])
+        s_H = build_manager_state(obs, lam, g_hat)
+        assert s_H.shape == (18,)
+        assert abs(s_H[0] - 0.7) < 1e-5    # rho_urllc
+        assert abs(s_H[1] - 0.3) < 1e-5    # rho_emBB
+        assert abs(s_H[2] - 0.05) < 1e-5   # bler
+        assert abs(s_H[3] - 3.0 / 5.0) < 1e-5   # severity_ref_norm (max one-hot)
+        assert abs(s_H[4] - 0.6) < 1e-5    # severity_mean_norm (over active amb)
+        assert abs(s_H[5] - 1.0) < 1e-5    # n_active_norm = 1/1
+        assert abs(s_H[6] - 0.15) < 1e-5   # aoi_mean
+        assert abs(s_H[7] - 0.25) < 1e-5   # aoi_max
+        from utils.config import LAMBDA_MAX
+        # λ_global normalized by LAMBDA_MAX ceiling (audit 2026-06-24); g_hat raw.
+        np.testing.assert_array_almost_equal(s_H[8:13], lam / LAMBDA_MAX)   # λ_global/LAMBDA_MAX
+        np.testing.assert_array_almost_equal(s_H[13:18], g_hat)             # current g_hat residual (raw)
 
 
 # ────────────────────────────────────────────────────────────────────

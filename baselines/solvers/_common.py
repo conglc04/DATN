@@ -16,7 +16,9 @@ import numpy as np
 
 from utils.config import (
     ALPHA_LAMBDA_DUAL,
+    AMB_ACTIVE_OFFSET,
     AMB_SEVERITY_NORM_OFFSET,
+    LAMBDA_MAX,
     OBS_AOI_MAX_IDX,
     OBS_AOI_MEAN_IDX,
     OBS_BLER_IDX,
@@ -122,27 +124,76 @@ def estimate_constraints(
 def build_manager_state(
     worker_obs: np.ndarray,
     lambda_global: np.ndarray,
+    g_hat: np.ndarray,
 ) -> np.ndarray:
-    """Construct (6 + 4K+1)-dim Manager state s_H from Worker obs + λ_global.
+    """Construct (10 + 8K)-dim Manager state s_H from Worker obs + λ_global + g_hat.
 
     Layout (obs indices via OBS_*_IDX SSOT, utils.config — no hardcoded ints):
-        [0:2]        ρ_urllc, ρ_eMBB          (OBS_RHO_URLLC_IDX, OBS_RHO_EMBB_IDX)
-        [2]          mean BLER                (OBS_BLER_IDX)
-        [3]          severity_ref normalized  (argmax(obs[OBS_SEVERITY_OH_IDX:+LEN]) + 1) / 5.0
-        [4:6]        aoi_mean, aoi_max        (OBS_AOI_MEAN_IDX, OBS_AOI_MAX_IDX)
-        [6:6+4K+1]   λ_global (4K+1)-dim
-    At K=1: 6 + 5 = 11-dim (backward-compatible with legacy 11-dim state).
+        [0:2]            ρ_urllc, ρ_eMBB        (OBS_RHO_URLLC_IDX, OBS_RHO_EMBB_IDX)
+        [2]              mean BLER              (OBS_BLER_IDX)
+        [3]              severity_ref_norm      (argmax(one-hot)+1)/5 = MAX severity
+        [4]              severity_mean_norm     mean over ACTIVE amb of severity_k_norm
+                           — disambiguates (5,1,1) from (5,5,5): both share sev_ref=max
+                           but need different budget. Falls back to sev_ref when no
+                           ambulance is active (per-amb block is zeroed for inactive xe).
+        [5]              n_active_norm          n_active / K  (how much of the load is
+                           one urgent xe vs many — same ρ, different strategy)
+        [6:8]            aoi_mean, aoi_max      (OBS_AOI_MEAN_IDX, OBS_AOI_MAX_IDX)
+        [8 : 8+4K+1]     λ_global/LAMBDA_MAX (4K+1)  long-run dual PRICE (integral of
+                           past g), NORMALIZED to [0,1] by the LAMBDA_MAX clip ceiling
+                           (audit 2026-06-24). λ is one-sided [0, LAMBDA_MAX]; dividing
+                           by the ceiling puts it on the same [0,1] scale as the fixed
+                           block so it does not dominate the Manager network's input by
+                           magnitude. Pure linear rescale (bijective, no info lost); the
+                           dual ascent / penalty use the RAW LambdaState.lambda_global,
+                           NOT this obs copy, so dynamics are unaffected.
+        [.+ : .+4K+1]    g_hat   (4K+1)         CURRENT constraint RESIDUAL the augmented
+                           reward penalizes (C1 delay / C2 tail / C4 AoI / C5 AoI-tail /
+                           C3 eMBB slack). Kept RAW (NOT normalized): it is a SIGNED
+                           deviation (negative=slack, positive=violation) symmetric
+                           around 0, and that sign/zero-crossing carries the meaning the
+                           critic needs — rescaling by a one-sided ceiling would distort
+                           it. Without g the Manager critic faces partial observability —
+                           r_aug depends on g, not just λ (audit 2026-06-23).
+    At K=1: 10 + 8 = 18-dim. At K=3: 10 + 24 = 34-dim.
     """
+    lambda_global = np.asarray(lambda_global, dtype=np.float32)
+    g_hat = np.asarray(g_hat, dtype=np.float32)
+    if g_hat.shape != lambda_global.shape:
+        raise ValueError(
+            f"g_hat shape {g_hat.shape} != lambda_global shape {lambda_global.shape}"
+        )
+    K = (lambda_global.shape[0] - 1) // 4
+    # Normalize ONLY λ (one-sided [0, LAMBDA_MAX] → [0,1]); g_hat stays raw/signed.
+    lambda_norm = lambda_global / np.float32(LAMBDA_MAX)
     rho_urllc = float(worker_obs[OBS_RHO_URLLC_IDX])
     rho_emBB = float(worker_obs[OBS_RHO_EMBB_IDX])
     bler = float(worker_obs[OBS_BLER_IDX])
     sev_oh = worker_obs[OBS_SEVERITY_OH_IDX: OBS_SEVERITY_OH_IDX + OBS_SEVERITY_OH_LEN]
-    sev_idx = float((np.argmax(sev_oh) + 1) / 5.0)
+    sev_ref_norm = float((np.argmax(sev_oh) + 1) / 5.0)
+    # Per-ambulance severity + active flag (inactive xe → whole block zeroed in obs,
+    # so severity_mean is taken over ACTIVE ambulances only).
+    per_amb = np.asarray(
+        worker_obs[OBS_FIXED_BLOCK_LEN: OBS_FIXED_BLOCK_LEN + K * OBS_PER_AMB_BLOCK_LEN],
+        dtype=np.float32,
+    ).reshape(K, OBS_PER_AMB_BLOCK_LEN)
+    sev_per_amb = per_amb[:, AMB_SEVERITY_NORM_OFFSET]
+    active_per_amb = per_amb[:, AMB_ACTIVE_OFFSET] > 0.5
+    n_active = int(active_per_amb.sum())
+    sev_mean_norm = (
+        float(sev_per_amb[active_per_amb].mean()) if n_active > 0 else sev_ref_norm
+    )
+    n_active_norm = float(n_active) / float(K)
     aoi_mean = float(worker_obs[OBS_AOI_MEAN_IDX])
     aoi_max = float(worker_obs[OBS_AOI_MAX_IDX])
     return np.concatenate([
-        np.array([rho_urllc, rho_emBB, bler, sev_idx, aoi_mean, aoi_max], dtype=np.float32),
-        np.asarray(lambda_global, dtype=np.float32),
+        np.array(
+            [rho_urllc, rho_emBB, bler, sev_ref_norm, sev_mean_norm, n_active_norm,
+             aoi_mean, aoi_max],
+            dtype=np.float32,
+        ),
+        lambda_norm,
+        g_hat,
     ]).astype(np.float32)
 
 

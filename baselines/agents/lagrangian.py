@@ -78,23 +78,27 @@ import numpy as np
 
 from utils.config import (
     ALPHA_LAMBDA_DUAL,
-    AOI_REF_S,
-    D_REF_URLLC,
     LAMBDA_MAX,
-    R_REF_EMBB_MBPS,
     WORKER_STEPS_PER_MANAGER,
     build_dual_scales,
     build_lambda_warm_vector,
 )
 
-# Legacy 5-dim constants (C1-C5), retained for backward compat with ablation
-# variants (solvers/pa_ppo_soft.py, ppo_cmdp_flat.py) and pre-existing tests.
+# Legacy 5-dim constant (C1-C5), retained for backward compat with
+# tests/test_lagrangian.py only (NOT used by ablation variants
+# solvers/pa_ppo_soft.py/ppo_cmdp_flat.py — those use their own
+# unnormalized solvers._common.CMDPLagrangian, not this module's scales).
 N_HARD_CONSTRAINTS: int = 5
-DEFAULT_BETA_EMA: float = 0.05          # λ_warm slow EMA decay (Phase 3.2.6)
-CONSTRAINT_DUAL_SCALES: np.ndarray = np.asarray(
-    [D_REF_URLLC, 1.0, R_REF_EMBB_MBPS, AOI_REF_S, 1.0],
-    dtype=np.float64,
-)
+# λ-persistence (audit 2026-06-23): β_ema=1.0 = FULL persistence. λ_warm[sev]
+# is the PERSISTENT per-severity dual variable — at episode end the full learned
+# λ_global is saved (NOT a 5% EMA blend), and the next same-severity episode
+# warm-starts from it. The LAMBDA_WARM constant table is the ONE-TIME initial
+# value (first time a severity is seen per run). This fixes the starvation root
+# cause: β_ema=0.05 diluted accumulation 20× → λ_C2 pinned at λ_warm≈2.2 < the
+# equilibrium λ*≈4.0 needed to offset the eMBB reward gain → Manager starved
+# URLLC. With full persistence λ accumulates monotonically toward equilibrium
+# across episodes (reset only at a new run = new LambdaState).
+DEFAULT_BETA_EMA: float = 1.0           # full persistence (was 0.05 slow EMA)
 
 
 @dataclass
@@ -115,7 +119,8 @@ class LambdaState:
         K                  Number of ambulances (n_constraints = 4K+1)
         alpha_lambda       Dual learning rate (2e-4; config.ALPHA_LAMBDA_DUAL SSOT —
                             A/B 5e-4 reverted to 2e-4 on 2026-06-22
-        beta_ema           λ_warm slow EMA decay
+        beta_ema           λ_warm persistence blend (1.0 = full persistence;
+                            λ_warm[sev] = persistent per-severity dual variable)
         worker_steps_per_manager  W = 10 (Phase 1.4 ratio)
         force_zero_warm    Exp3 ablation: always warm-start from zero and
                             never EMA-write the λ_warm table (disable_warm_start)
@@ -148,9 +153,20 @@ class LambdaState:
     cum_steps: int = 0
     sev_prev: tuple[int, ...] | None = None
     sev_ref_prev: int = 0
+    # Most recent window deviation g_hat (the SAME vector dual ascent consumed in
+    # on_manager_step_end). Exposed to the Manager via get_deviation_hat() so the
+    # high-level policy observes the CURRENT constraint residual g_j — distinct
+    # from λ_global (the long-run integral of past g). The Manager's augmented
+    # reward r_aug = r − Σ λ_j·max(0, g_j) depends on g directly, so without g in
+    # the state the Manager critic faces partial observability (V(s) cannot be fit
+    # → negative explained variance). Audit 2026-06-23. Read-only for the Manager.
+    last_g_hat: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         self.n_constraints = 4 * self.K + 1
+        # Initial dual_scales without severity (fallback fixed-scale); rebuilt
+        # per-episode in reset_episode() with the actual severity_per_amb so
+        # C1/C4 scales match each ambulance's D_max/AoI_max threshold.
         self.dual_scales = build_dual_scales(self.K)
         if self.lambda_global is None:
             self.lambda_global = np.zeros(self.n_constraints, dtype=np.float64)
@@ -160,6 +176,8 @@ class LambdaState:
             self.win_c = np.zeros(self.n_constraints, dtype=np.float64)
         if self.cum_c is None:
             self.cum_c = np.zeros(self.n_constraints, dtype=np.float64)
+        if self.last_g_hat is None:
+            self.last_g_hat = np.zeros(self.n_constraints, dtype=np.float64)
         # C2 (delay tail) at indices [K, 2K), C5 (AoI tail) at [3K, 4K).
         self._tail_mask = np.zeros(self.n_constraints, dtype=bool)
         self._tail_mask[self.K:2 * self.K] = True
@@ -183,11 +201,21 @@ class LambdaState:
     # ------------------------------------------------------------------
 
     def reset_episode(self, severity_per_amb: Sequence[int], severity_ref: int) -> None:
-        """Sync BOTH λ_global AND λ_local from λ_warm[severity_per_amb] (Fix Error 1).
+        """Load λ_global/λ_local from the PERSISTENT λ_warm[severity_per_amb].
 
-        Called at start of each episode. Cross-episode: λ_warm table carries over;
-        λ_global is re-loaded from warm-start (no stale state from previous episode).
+        Called at start of each episode. This is a CONTINUE, not a reset-to-zero:
+        λ_warm[sev] persists across episodes (full persistence, β_ema=1.0), so a
+        same-severity episode warm-starts from the accumulated dual, letting λ
+        climb monotonically toward the CMDP equilibrium across episodes. The
+        LAMBDA_WARM constant only seeds λ_warm[sev] the first time that severity
+        is seen in the run. The within-episode estimators (win_c/cum_c) DO reset
+        each episode — they measure this episode's window/tail, and severity (eps
+        regime) can differ between episodes. λ persistence is reset only by
+        constructing a new LambdaState (= new training run/seed).
         """
+        # Rebuild dual_scales for this episode's severity_per_amb (ĐX2 audit
+        # 2026-06-24): C1_k scale = D_max^{sev_k}, C4_k = AoI_max^{sev_k}.
+        self.dual_scales = build_dual_scales(self.K, severity_per_amb)
         warm = self._warm_for(severity_per_amb, severity_ref)
         self.lambda_global = warm
         self.lambda_local = warm.copy()
@@ -195,6 +223,9 @@ class LambdaState:
         self.win_steps = 0
         self.cum_c = np.zeros(self.n_constraints, dtype=np.float64)
         self.cum_steps = 0
+        # No window measured yet this episode → Manager observes a zero residual on
+        # its first action (correct: no QoS sample has arrived).
+        self.last_g_hat = np.zeros(self.n_constraints, dtype=np.float64)
         self.sev_prev = tuple(severity_per_amb)
         self.sev_ref_prev = severity_ref
 
@@ -217,6 +248,8 @@ class LambdaState:
         if sev_key == self.sev_prev and severity_ref == self.sev_ref_prev:
             return
         self._ema_save_current_severity()
+        # Rebuild dual_scales for new severity (ĐX2 — mirrors reset_episode).
+        self.dual_scales = build_dual_scales(self.K, severity_per_amb)
         warm = self._warm_for(severity_per_amb, severity_ref)
         self.lambda_global = warm
         self.lambda_local = warm.copy()
@@ -226,6 +259,7 @@ class LambdaState:
         # from the old severity is no longer valid; reset it too.
         self.cum_c = np.zeros(self.n_constraints, dtype=np.float64)
         self.cum_steps = 0
+        self.last_g_hat = np.zeros(self.n_constraints, dtype=np.float64)
         self.sev_prev = sev_key
         self.sev_ref_prev = severity_ref
 
@@ -257,6 +291,12 @@ class LambdaState:
         self.cum_steps = 0
 
     def _ema_save_current_severity(self) -> None:
+        """Persist the current severity's learned λ_global into λ_warm[sev].
+
+        With β_ema=1.0 (default, full persistence) this is λ_warm[sev] = λ_global
+        — the per-severity dual variable carries forward to the next same-severity
+        episode. β_ema<1 (legacy/ablation) blends with the prior λ_warm.
+        """
         if self.force_zero_warm or self.sev_prev is None:
             return
         old_warm = self.lambda_warm.get(self.sev_prev)
@@ -292,6 +332,10 @@ class LambdaState:
         g_hat_mean = self.win_c / self.win_steps
         g_hat_tail = self.cum_c / self.cum_steps if self.cum_steps > 0 else g_hat_mean
         g_hat = np.where(self._tail_mask, g_hat_tail, g_hat_mean)
+        # Cache the residual the Manager will observe at the next decision (the SAME
+        # vector dual ascent uses below). Stored BEFORE the win_c reset so it
+        # survives the Option-b window reset. See get_deviation_hat().
+        self.last_g_hat = g_hat.copy()
         # Reviewer M4 (W06): bounded projection Π_Λ(·) — clip to [0, LAMBDA_MAX].
         # Prevents dual blow-up under sustained violations. Empirical λ ≤ 2.5
         # → LAMBDA_MAX=10 is soft safety net. See docs/13 §2.3.3.
@@ -396,6 +440,7 @@ class LambdaState:
             "win_steps": self.win_steps,
             "cum_c": self.cum_c.tolist(),
             "cum_steps": self.cum_steps,
+            "last_g_hat": self.last_g_hat.tolist(),
             "sev_prev": list(self.sev_prev) if self.sev_prev is not None else None,
             "sev_ref_prev": self.sev_ref_prev,
         }
@@ -410,6 +455,9 @@ class LambdaState:
             d.get("cum_c", np.zeros(self.n_constraints).tolist()), dtype=np.float64
         )
         self.cum_steps = d.get("cum_steps", 0)
+        self.last_g_hat = np.array(
+            d.get("last_g_hat", np.zeros(self.n_constraints).tolist()), dtype=np.float64
+        )
         sp = d.get("sev_prev")
         self.sev_prev = tuple(sp) if sp is not None else None
         self.sev_ref_prev = d.get("sev_ref_prev", 0)
@@ -430,6 +478,34 @@ class LambdaState:
     def get_lambda_global(self) -> np.ndarray:
         """Read-only view of current λ_global."""
         return self.lambda_global.copy()
+
+    def get_deviation_hat(self) -> np.ndarray:
+        """Read-only view of the most recent window deviation g_hat = ĝ_{t-1} (4K+1).
+
+        The residual of the LAST COMPLETED Manager window (C1/C3/C4 = Option-b
+        window mean, C2/C5 = Option-a episode-cumulative tail) — the SAME vector
+        dual ascent consumed at the last on_manager_step_end. Read BEFORE the
+        Manager picks b_rrm_t, so it reflects b_rrm_{t-1}, never the not-yet-run
+        window (no future-information leak). Exposed alongside λ_global (the
+        long-run price) so the Manager is not blind to the per-window residual.
+
+        Same-SOURCE proxy, NOT a literal equality with the reward's penalty:
+        this is the SIGNED window MEAN of (c_j-d_j)/scale_j (via accumulate());
+        augmented_reward() instead applies max(0,·) (hinge) to that SAME
+        per-tick deviation, individually per Worker-step, before the SMDP
+        discounted sum the Manager's critic actually learns from. Hinge is
+        convex, so mean(max(0,dev)) >= max(0,mean(dev)) (Jensen) — the true
+        accumulated penalty is >= what hinging g_hat after the fact would give.
+        g_hat answers "which constraints were under pressure, in which
+        direction" (same c_vec/d_phi/severity source as the reward), not
+        "exactly how much reward was subtracted this window".
+
+        Zero before any window has been measured (episode start), and reset on
+        a severity change (on_manager_step_start) so it never carries a
+        residual measured under a different severity's threshold regime. Does
+        NOT mutate state.
+        """
+        return self.last_g_hat.copy()
 
     def get_lambda_local(self) -> np.ndarray:
         """Read-only view of current λ_local (Worker-side)."""

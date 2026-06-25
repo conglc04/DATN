@@ -73,7 +73,28 @@ class WorkerActor(nn.Module):
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.mean_net = _make_mlp(state_dim, hidden, action_dim)
+        self._zero_init_output_layer()
         self.log_std = nn.Parameter(torch.zeros(action_dim) - 0.5)  # std ≈ 0.6
+
+    def _zero_init_output_layer(self) -> None:
+        """Zero the final layer so all K per-vehicle logits start tied (audit
+        2026-06-24, ĐX1).
+
+        Default `nn.Linear` init (Kaiming uniform) gives each output unit a
+        small random weight/bias, so the K logits differ by a seed-dependent
+        ~1.05-1.25x factor before any training. PPO's self-reinforcing policy
+        gradient turns that initial asymmetry into a persistent,
+        severity-unconditional PRB allocation bias (one ambulance favored
+        regardless of its actual severity). Zeroing only the output layer's
+        weight and bias makes mean_net(obs) == 0 for every obs at init — all
+        K logits start exactly equal (softmax → uniform) — while leaving the
+        hidden layers' random init untouched for feature learning. Applied
+        once at construction; not re-applied when the active-ambulance count
+        changes during an episode.
+        """
+        output_layer = self.mean_net[-1]
+        nn.init.zeros_(output_layer.weight)
+        nn.init.zeros_(output_layer.bias)
 
     def distribution(self, obs: torch.Tensor) -> Normal:
         mean = self.mean_net(obs)

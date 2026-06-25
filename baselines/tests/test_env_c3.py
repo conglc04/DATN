@@ -10,8 +10,8 @@ C3 (eMBB throughput floor R_eMBB >= R_min) is a CONSTRAINT signal, NOT a reward
 modifier:
 - Tracked as the shared C3 slot c_vec[4K] in env.step() info dict
   ((4K+1)-dim layout [C1_0..,C2_0..,C4_0..,C5_0..,C3_shared]; at K=1 -> index 4).
-- Per-step threshold d_phi[4K] = 0; R_min^sev_ref is embedded in the SIGNED gap
-  c_vec[4K] = R_min^sev_ref - R_eMBB.
+- Per-step threshold d_phi[4K] = 0; R_min (FIXED 10 Mbps, severity-
+  independent) is embedded in the SIGNED gap c_vec[4K] = R_min - R_eMBB.
 - Penalty handled by Lagrangian lambda_C3 in agent (not embedded in env reward).
 
 WHY THE SIGN MATTERS (the dangerous-if-wrong case):
@@ -52,12 +52,13 @@ def test_c3_tracked_as_constraint_signal():
     _, _, _, _, info = env.step(env.action_space.sample())
     assert "c_vec" in info and info["c_vec"].shape == (5,)
     assert "d_phi" in info and info["d_phi"].shape == (5,)
-    # d_phi[4] = 0 because R_min^sev_ref is embedded in the signed gap c_vec[4].
+    # d_phi[4] = 0 because R_min (fixed, severity-independent) is embedded in
+    # the signed gap c_vec[4].
     assert abs(info["d_phi"][4]) < 1e-6
 
 
 def test_c3_signed_gap_sign_convention(monkeypatch):
-    """LOCK the C3 sign: c_vec[4K] = R_min^sev_ref - R_eMBB.
+    """LOCK the C3 sign: c_vec[4K] = R_min - R_eMBB (R_min fixed, severity-independent).
 
     POSITIVE when R_eMBB < R_min (violation) so dual ascent raises lambda_C3;
     NEGATIVE when R_eMBB > R_min (surplus). A flipped sign trains silently in the

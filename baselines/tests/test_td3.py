@@ -148,13 +148,14 @@ class TestTD3Solver:
 class TestTD3SmokeTrainOneEpisode:
     """1-episode smoke through smoke_train.train()."""
 
-    def test_runs_without_crash(self):
+    def test_runs_without_crash(self, tmp_path):
         from solvers.train_offpolicy import train
         stats = train(
             baseline_name="td3",
             n_episodes=1,
             seed=0,
-            log_dir="logs/_smoke_unittest_td3",
+            log_dir=str(tmp_path / "smoke_td3"),
+            checkpoint_dir=str(tmp_path / "smoke_td3" / "checkpoints"),
             initial_severity=3,
             print_every=10_000,
             checkpoint_every=0,
@@ -171,7 +172,7 @@ class TestSolverObservesLambda:
     overlay to prove the loop calls it with the real (nonzero) dual.
     """
 
-    def test_smoke_train_injects_nonzero_lambda(self, monkeypatch):
+    def test_smoke_train_injects_nonzero_lambda(self, monkeypatch, tmp_path):
         import solvers.train_offpolicy as st
 
         seen = {"calls": 0, "nonzero": False}
@@ -188,7 +189,8 @@ class TestSolverObservesLambda:
             baseline_name="td3",
             n_episodes=1,
             seed=0,
-            log_dir="logs/_smoke_unittest_td3_lambda",
+            log_dir=str(tmp_path / "smoke_td3_lambda"),
+            checkpoint_dir=str(tmp_path / "smoke_td3_lambda" / "checkpoints"),
             initial_severity=3,          # φ3 warm-start λ is clearly nonzero
             print_every=10_000,
             checkpoint_every=0,

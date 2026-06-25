@@ -223,7 +223,10 @@ def train(
         s_H_prev = None
         a_H_raw_prev = None
         if has_manager and has_lambda_state:
-            s_H = build_manager_state(obs, agent.lambda_state.get_lambda_global())
+            s_H = build_manager_state(
+                obs, agent.lambda_state.get_lambda_global(),
+                agent.lambda_state.get_deviation_hat(),
+            )
             a_H_raw = _manager_act(agent.manager, s_H)
             b_rrm = decode_manager_action(a_H_raw)["b_rrm"]
             env.set_rrm_budget(b_rrm)
@@ -284,7 +287,10 @@ def train(
             if has_lambda_state and worker_step_idx % WORKER_STEPS_PER_MANAGER == 0:
                 agent.on_manager_step_end()
                 if has_manager:
-                    s_H_next_mgr = build_manager_state(next_obs, agent.lambda_state.get_lambda_global())
+                    s_H_next_mgr = build_manager_state(
+                        next_obs, agent.lambda_state.get_lambda_global(),
+                        agent.lambda_state.get_deviation_hat(),
+                    )
                     if s_H_prev is not None:
                         # TD-target bootstrap mask = terminated (true terminal), NOT done:
                         # a 400s timeout truncation is non-terminal (value_bootstrap_is_terminal).
@@ -351,7 +357,10 @@ def train(
         if has_lambda_state and worker_step_idx % WORKER_STEPS_PER_MANAGER != 0:
             agent.on_manager_step_end()
             if has_manager and s_H_prev is not None:
-                s_H_final = build_manager_state(obs, agent.lambda_state.get_lambda_global())
+                s_H_final = build_manager_state(
+                    obs, agent.lambda_state.get_lambda_global(),
+                    agent.lambda_state.get_deviation_hat(),
+                )
                 # Final partial Manager window: bootstrap mask = terminated, NOT hardcoded
                 # True — a 400s timeout truncation is non-terminal (value_bootstrap_is_terminal).
                 agent.manager.store(s_H_prev, a_H_raw_prev, r_H_acc, s_H_final,

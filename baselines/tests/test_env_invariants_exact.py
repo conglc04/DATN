@@ -292,23 +292,17 @@ class TestUrgencyNaNGuard:
 
 
 class TestSeverityRefRole:
-    def test_alpha_e_uses_severity_ref_not_per_ambulance_severity(self):
-        """K=3, per-ambulance = [1,1,5], severity_ref = 5.
-        alpha_e should be 0.05 (severity 5), not 0.70 (severity 1).
-        We verify via reward: same eMBB throughput, lower reward at higher severity_ref."""
-        from utils.config import get_severity_alpha
+    def test_severity_ref_is_max_of_per_ambulance(self):
+        """K=3, per-ambulance = [1,1,5] → severity_ref = max = 5.
 
-        _, alpha_e_sev5 = get_severity_alpha(5)
-        _, alpha_e_sev1 = get_severity_alpha(1)
-
+        severity_ref drives SHARED quantities (severity one-hot, C3 floor).
+        Reward no longer uses α_e (removed 2026-06-23), so we verify the
+        severity_ref SELECTION directly: env.severity == max(per_amb)."""
         env5 = ORANEnv(EnvConfig(K_ambulances=3))
         env5.reset(seed=7, options={"severity_per_amb": [1, 1, 5]})  # severity_ref=5
-        # Force identical eMBB throughput by checking info after one step
         env5.step(np.zeros(env5.action_space.shape, dtype=np.float32))
-        assert env5.severity == 5
-        assert abs(alpha_e_sev5 - 0.05) < 1e-9
-        assert abs(alpha_e_sev1 - 0.70) < 1e-9
-        assert alpha_e_sev5 < alpha_e_sev1  # lower alpha_e at higher severity_ref
+        assert env5.severity == 5, "severity_ref must be max(severity_per_amb)"
+        assert max(env5.severity_per_amb) == 5
         env5.close()
 
     def test_c3_threshold_uses_fixed_floor_regardless_of_severity(self):
@@ -664,7 +658,7 @@ class TestSmokeInvariants:
 
 class TestC3SignedGapRealEnv:
     def test_c3_equals_r_min_minus_mean_r_embb_exact(self):
-        """c_vec[4K] = mean(R_min^sev_ref - R_eMBB per tick) = R_min - mean(R_eMBB).
+        """c_vec[4K] = mean(R_min - R_eMBB per tick) = R_min - mean(R_eMBB) (R_min fixed, severity-independent).
         Verify using embb_mbps_history (per-tick eMBB throughput log).
         """
         sev = 3

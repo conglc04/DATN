@@ -66,6 +66,7 @@ class SACSolver:
             warmup_steps=500,
             buffer_capacity=50_000,
             batch_size=256,
+            zero_init_output=True,  # ĐX1 (audit 2026-06-24): this IS the Worker
         )
         kwargs = {} if alpha_lambda is None else {"alpha_lambda": alpha_lambda}
         self.lambda_state = LambdaState(K=K, **kwargs)

@@ -199,3 +199,92 @@ def test_m18_same_seed_same_trace():
         a = np.zeros(env.action_space.shape, dtype=np.float32)
         return [env.step(a)[1] for _ in range(10)]
     assert first_rewards(55) == first_rewards(55)
+
+
+# 19. PRB floor must hold under extreme logit skew (reserve-first order, 2026-06-24)
+def test_m19_prb_min_qos_floor_under_extreme_skew():
+    """One dominant softmax weight must not zero out another active amb's floor.
+
+    Regression for the floor-then-correct-overflow bug fixed 2026-06-24: with
+    raw logits [10,-5,-5] and B_U=27, the old order (floor full-budget
+    proportional split -> force minimum -> rescale on overflow) produced
+    [26,1,0], leaving amb_2 at 0 PRB despite being active. Reserve-first
+    (reserve K_active*PRB_MIN_QOS before the softmax split) guarantees the
+    floor for every active amb by construction.
+    """
+    from utils.config import PRB_MIN_QOS
+    env = ORANEnv(EnvConfig(K_ambulances=3, sample_severity=False, initial_severity=3), seed=0)
+    env.reset(seed=0, options={"severity_per_amb": [3, 3, 3]})
+    env.active_mask = np.ones(3, dtype=bool)
+    env._prb_weights = np.array([10.0, -5.0, -5.0], dtype=np.float64)
+    split = env._prb_split_intra_slice(27)
+    assert int(split.sum()) == 27
+    assert np.all(split >= PRB_MIN_QOS), f"floor violated under extreme skew: {split.tolist()}"
+    assert split.tolist() == [25, 1, 1], f"reserve-first allocation mismatch: {split.tolist()}"
+
+
+# 20. Worker actor zero-init: PPO (ĐX1, audit 2026-06-24)
+def test_m20_ppo_worker_actor_zero_init():
+    """WorkerActor.mean_net output layer must be exactly zero at construction,
+    so all K per-vehicle logits start tied (uniform softmax), removing the
+    random init asymmetry PPO's policy gradient would otherwise amplify into
+    a severity-blind PRB bias."""
+    import torch
+    from agents.worker_agent import WorkerActor
+    torch.manual_seed(123)
+    actor = WorkerActor(state_dim=54, action_dim=3)
+    out_layer = actor.mean_net[-1]
+    assert torch.all(out_layer.weight == 0.0)
+    assert torch.all(out_layer.bias == 0.0)
+    obs = torch.randn(5, 54)
+    mean = actor.distribution(obs).mean
+    assert torch.all(mean == 0.0), "mean_net(obs) must be exactly 0 at init for any obs"
+
+
+# 21. Worker actor zero-init: TD3 (ĐX1 extended, audit 2026-06-24)
+def test_m21_td3_worker_actor_zero_init():
+    """Only the Worker TD3Agent (zero_init_output=True) gets the fix; the
+    Manager's TD3ManagerAgent keeps default random init (no cross-dim bias
+    to fix for a 1-dim action)."""
+    import torch
+    from agents.td3_agent import TD3Agent
+    from agents.manager_agent import TD3ManagerAgent, manager_state_dim
+    torch.manual_seed(123)
+    low = np.full(3, -3.0, dtype=np.float32)
+    high = np.full(3, 3.0, dtype=np.float32)
+    worker = TD3Agent(state_dim=54, action_dim=3, action_low=low, action_high=high,
+                       zero_init_output=True)
+    assert torch.all(worker.actor.net[-1].weight == 0.0)
+    assert torch.all(worker.actor.net[-1].bias == 0.0)
+    obs = torch.randn(5, 54)
+    action = worker.actor(obs)
+    assert torch.allclose(action, torch.zeros_like(action), atol=1e-6), (
+        "tanh(0)=0 -> action must sit at the [low,high] midpoint for any obs")
+
+    manager = TD3ManagerAgent(state_dim=manager_state_dim(3), seed=123)
+    assert not torch.all(manager.actor.net[-1].weight == 0.0), (
+        "Manager actor must keep default random init (zero_init_output not passed)")
+
+
+# 22. Worker actor zero-init: SAC (ĐX1 extended, audit 2026-06-24)
+def test_m22_sac_worker_actor_zero_init():
+    """Only mean_head is zeroed (the mean-bias analog); log_std_head keeps
+    default init, matching WorkerActor where log_std is already a
+    state-independent constant. Manager's SACManagerAgent stays default."""
+    import torch
+    from agents.sac_agent import SACAgent
+    from agents.manager_agent import SACManagerAgent, manager_state_dim
+    torch.manual_seed(123)
+    low = np.full(3, -3.0, dtype=np.float32)
+    high = np.full(3, 3.0, dtype=np.float32)
+    worker = SACAgent(state_dim=54, action_dim=3, action_low=low, action_high=high,
+                       zero_init_output=True)
+    assert torch.all(worker.actor.mean_head.weight == 0.0)
+    assert torch.all(worker.actor.mean_head.bias == 0.0)
+    obs = torch.randn(5, 54)
+    mean, _ = worker.actor._dist_params(obs)
+    assert torch.all(mean == 0.0), "mean_head(trunk(obs)) must be exactly 0 at init for any obs"
+
+    manager = SACManagerAgent(state_dim=manager_state_dim(3), seed=123)
+    assert not torch.all(manager.actor.mean_head.weight == 0.0), (
+        "Manager actor must keep default random init (zero_init_output not passed)")

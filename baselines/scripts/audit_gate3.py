@@ -1,24 +1,27 @@
 """Gate 3x audit — post-training convergence + constraint-satisfaction report.
 
-Reads the per-episode metrics CSV (logs/<algo>_seed<S>/metrics.csv) and the
-summary JSON, then prints a PASS/WARN/FAIL scorecard for one training week:
+Reads the per-episode metrics CSV and the summary JSON, then prints a
+PASS/WARN/FAIL scorecard for one training run:
 
   * Convergence   — reward trend (first-window vs last-window), stability
   * C1 latency    — final mean_e2e_ms vs D_max^sev (tightest severity)
   * C2 delay-tail — viol_rate trend (rule-of-three caveat vs eps^sev)
   * C3 eMBB floor — mean_embb_mbps vs FIXED 10 Mbps; c3_viol_rate
-  * C4/C5 AoI     — via lambda_C4/C5 duals (raw AoI not in CSV — see note)
+  * C4/C5 AoI     — direct from mean_aoi_ms / aoi_viol_rate columns (raw AoI,
+                    not just the λ_C4/C5 duals); WARNs gracefully if reading
+                    an older CSV predating these columns
   * lambda-sat    — every lambda_global < LAMBDA_MAX (no dual blow-up)
   * health        — NaN/Inf guard
 
-Usage (from baselines/):
-  python -m scripts.audit_gate3 --algo ppo --seeds 0
-  python -m scripts.audit_gate3 --algo td3 --seeds 0 1 2 3 4
-  python -m scripts.audit_gate3 --algo ppo            # auto-discover seeds
+CSV path convention (matches train.py's run_dir, audit 2026-06-25):
+  --K not given : <log-dir>/<algo>_seed<S>/metrics.csv            (flat, legacy)
+  --K given     : <log-dir>/<algo>_K<K>_seed<S>/<algo>_seed<S>/metrics.csv
+                  (nested, current train.py / run_sweep.sh layout)
 
-NOTE: AoI (C4/C5) raw satisfaction is not currently in metrics.csv (only the
-duals). To audit C4/C5 directly, add mean_aoi_ms / aoi_viol_rate columns to the
-logger. This script flags that gap rather than silently passing C4/C5.
+Usage (from baselines/):
+  python -m scripts.audit_gate3 --algo ppo --K 3 --log-dir logs/sweep --seeds 0
+  python -m scripts.audit_gate3 --algo ppo --K 1 --log-dir logs/sweep  # auto-discover seeds
+  python -m scripts.audit_gate3 --algo ppo --seeds 0                   # legacy flat layout
 """
 
 from __future__ import annotations
@@ -67,13 +70,16 @@ def _window_mean(xs, frac=0.1):
     return sum(xs[-n:]) / n
 
 
-def audit_seed(algo, seed):
-    csv_path = f"logs/{algo}_seed{seed}/metrics.csv"
+def audit_seed(algo, seed, log_dir="logs", K=None):
+    if K is not None:
+        csv_path = f"{log_dir}/{algo}_K{K}_seed{seed}/{algo}_seed{seed}/metrics.csv"
+    else:
+        csv_path = f"{log_dir}/{algo}_seed{seed}/metrics.csv"
     if not os.path.exists(csv_path):
-        return None, [f"{FAIL}: no metrics at {csv_path}"]
+        return None, [("path", FAIL, f"no metrics at {csv_path}")]
     rows = _read_csv(csv_path)
     if not rows:
-        return None, [f"{FAIL}: empty {csv_path}"]
+        return None, [("path", FAIL, f"empty {csv_path}")]
 
     sev = _parse_sev(rows)
     sev_tight = max(sev)                       # tightest QoS = highest severity
@@ -163,23 +169,30 @@ def audit_seed(algo, seed):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--algo", required=True)
+    ap.add_argument("--K", type=int, default=None,
+                     help="Ambulance count. Set this to audit the current nested "
+                          "<log-dir>/<algo>_K<K>_seed<S>/ layout (train.py / run_sweep.sh). "
+                          "Omit for the legacy flat <log-dir>/<algo>_seed<S>/ layout.")
+    ap.add_argument("--log-dir", default="logs")
     ap.add_argument("--seeds", nargs="*", type=int, default=None)
     args = ap.parse_args()
 
     seeds = args.seeds
     if not seeds:
-        seeds = sorted(int(m.group(1)) for d in glob.glob(f"logs/{args.algo}_seed*")
+        pattern = (f"{args.log_dir}/{args.algo}_K{args.K}_seed*" if args.K is not None
+                   else f"{args.log_dir}/{args.algo}_seed*")
+        seeds = sorted(int(m.group(1)) for d in glob.glob(pattern)
                        for m in [re.search(r"_seed(\d+)$", d)] if m)
     if not seeds:
-        print(f"No logs found for algo={args.algo}. Run training first.")
+        print(f"No logs found for algo={args.algo} under {args.log_dir}. Run training first.")
         return 1
 
     print("=" * 84)
-    print(f"GATE 3x AUDIT — algo={args.algo}  seeds={seeds}")
+    print(f"GATE 3x AUDIT — algo={args.algo}  K={args.K}  log_dir={args.log_dir}  seeds={seeds}")
     print("=" * 84)
     worst = OK
     for s in seeds:
-        meta, checks = audit_seed(args.algo, s)
+        meta, checks = audit_seed(args.algo, s, log_dir=args.log_dir, K=args.K)
         hdr = f"seed {s}" + (f"  sev={meta['sev']}  episodes={meta['n_ep']}" if meta else "")
         print(f"\n--- {hdr} ---")
         for name, status, msg in checks:

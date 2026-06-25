@@ -67,11 +67,15 @@ C5 `A_th = AoI_max^{sev}` (same threshold as C4, m=1; `config.py:484` `d5=eps_ao
 | S2 | same SMDP sum (TD3/SAC, post-fix) | `train_offpolicy.py:259` | mutation m07 | ✅ |
 | S3 | `γ_H = GAMMA_MANAGER` Bellman/GAE all 3 | `manager_agent.py:206,384,510` | test_solver_equivalence | ✅ |
 
-## Intra-slice + N_req (Gate 4)
+## Intra-slice — pure-RL (audit 2026-06-21, gỡ N_req tier-protection — table dưới SUPERSEDES Gate-4 rows trước đây)
+
+> **2026-06-21**: I2/I3 dưới đây (severity-tier N_req protection + β·urgency score) **KHÔNG CÒN TỒN TẠI trong code** — `_prb_split_intra_slice` nay là pure-RL softmax thuần (xem `agents/worker_agent.py` "pure-RL intra-slice" docstring + `audit/closure_checks.py::g7_nreq` comment "the env allocation is now PURE-RL softmax — there is no N_req formula in the env anymore"). Giữ I2/I3 ở đây làm **historical record** (✅ đúng tại thời điểm 2026-06-15), đánh dấu ⛔ SUPERSEDED. I1 = independent existence-check ĐỘC LẬP với allocation (chưa bao giờ là cross-check của code), vẫn ✅ nhưng pointer code đã sửa.
 
 | ID | Equation | Code | Independent | Status |
 |----|----------|------|-------------|--------|
-| I1 | `N_req=⌈C_req/(η·B·log₂(1+SINR))⌉`, `C_req=load+pkt/D_max` (full units bps/[bps/PRB]=PRB) | `oran_env.py:1111-1119` | closure G7 / mutation m15 | ✅ |
-| I2 | Phase-1 severity-tier-descending protection | `oran_env.py:1156-1178` | test_env_severity_k | ✅ |
-| I3 | Phase-2 surplus `score=N_req·(1+β·urg)·softmax(w)` | `oran_env.py:1133-1184` | test_env_severity_k | ✅ |
-| I4 | `Σ_k B_k = B_URLLC`, inactive=0 | `oran_env.py:1130-1186` | closure G5 / mutation m06,m17 | ✅ |
+| I1 | `N_req=⌈C_req/(η·B·log₂(1+SINR))⌉`, `C_req=load+pkt/D_max` (full units bps/[bps/PRB]=PRB) — **independent feasibility-existence check, KHÔNG dùng bởi env allocation** | `audit/closure_checks.py::g7_nreq` (was `oran_env.py:1111-1119` — pointer SAI, đó là `_sample_bler`, đã sửa) | closure G7 / mutation m15 | ✅ (independent oracle, not env cross-check) |
+| I2 | ⛔ SUPERSEDED 2026-06-21 — Phase-1 severity-tier-descending protection (✅ đúng 2026-06-15→2026-06-21, nay KHÔNG còn trong code) | ~~`oran_env.py:1156-1178`~~ → nay pure-softmax tại `oran_env.py:1188-1244` | test_env_severity_k (test đã update sang pure-RL assertion) | ⛔ REMOVED |
+| I3 | ⛔ SUPERSEDED 2026-06-21 — Phase-2 surplus `score=N_req·(1+β·urg)·softmax(w)` (✅ đúng 2026-06-15→2026-06-21, nay KHÔNG còn trong code) | ~~`oran_env.py:1133-1184`~~ → nay pure-softmax tại `oran_env.py:1188-1244` | test_env_severity_k (test đã update sang pure-RL assertion) | ⛔ REMOVED |
+| I4 | `Σ_k B_k = B_URLLC`, inactive=0 (KHÔNG đổi qua refactor — vẫn đúng) | `oran_env.py:1194-1274` (`_prb_split_intra_slice`, pure-RL softmax + largest-remainder) | closure G7 (`G7.pure_rl_split_conserves_budget`) / mutation m06,m17 | ✅ |
+| I5 | **MỚI 2026-06-21, ĐỔI ORDER 2026-06-24**: anti-starvation floor PHẲNG `PRB_k≥PRB_MIN_QOS=1` cho mọi xe ACTIVE (KHÔNG severity-tiered — thay I2/I3), nay giữ **by construction** qua reserve-first order: `reserved=K_active·PRB_MIN_QOS` trừ trước khỏi `B_U`, softmax chỉ chia phần còn lại, `PRB_k=PRB_MIN_QOS+extra_k` | `oran_env.py:1242-1267` (`reserved = K_active * PRB_MIN_QOS`; `allocs = np.full(K_active, PRB_MIN_QOS) + extra`) | closure G7 (`G7.pure_rl_split_min_qos`) | ✅ |
+| I6 | ⛔ SUPERSEDED 2026-06-24 — order cũ (floor toàn bộ B_U theo tỷ lệ → ép tối thiểu → rescale overflow) có thể đưa 1 xe về 0 PRB khi 1 logit áp đảo cực độ (vd raw `[10,−5,−5]`, B_U=27 → `[26,1,0]`), vi phạm I5. Fix: reserve floor TRƯỚC khi softmax-split (xem I5) | ~~`allocs = np.maximum(allocs, PRB_MIN_QOS)` + rescale `B_U*allocs//sum(allocs)`~~ → nay reserve-first tại `oran_env.py:1242-1267` | `tests/test_mutation_guards.py::test_m19_prb_min_qos_floor_under_extreme_skew` (raw `[10,−5,−5]`, B_U=27 → asserts exact `[25,1,1]`) | ⛔ REMOVED |

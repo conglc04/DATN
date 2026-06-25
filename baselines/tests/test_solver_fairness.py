@@ -31,6 +31,7 @@ from solvers._common import (
 from solvers.sac import SACSolver
 from solvers.td3 import TD3Solver
 from utils.config import (
+    AMB_ACTIVE_OFFSET,
     AMB_LAMBDA_C1_OFFSET,
     AMB_LAMBDA_C2_OFFSET,
     AMB_LAMBDA_C4_OFFSET,
@@ -349,7 +350,9 @@ class TestAugmentedRewardSign:
         """
         sev = 3
         lam = build_lambda_warm_vector([sev], sev)   # shape (5,)
-        scale = build_dual_scales(1)                  # shape (5,)
+        # Per-severity scale (ĐX2 audit 2026-06-24): reset_episode rebuilds
+        # dual_scales with severity_per_amb, so the test must use the same.
+        scale = build_dual_scales(1, severity_per_amb=[sev])  # shape (5,)
         d = build_d_phi_vector([sev])
         deltas = np.array([0.002, 0.1, 0.5, 0.02, 0.003], dtype=np.float64)
         c = d + deltas
@@ -980,25 +983,32 @@ class TestMaskSeverity:
 # ============================================================
 
 class TestManagerStateDim:
-    """manager_state_dim formula: 6 + (4K+1) = 6 + n_constraints."""
+    """manager_state_dim formula: 8 + 2*(4K+1) (audit 2026-06-23 — adds the
+    current g_hat residual alongside λ_global, plus severity_mean_norm and
+    n_active_norm so (5,1,1) and (5,5,5) at K=3 no longer alias under
+    severity_ref=max). Layout: [0:2] rho_urllc/eMBB, [2] bler,
+    [3] severity_ref_norm, [4] severity_mean_norm, [5] n_active_norm,
+    [6:8] aoi_mean/max, [8:8+4K+1] lambda_global, [.:.+4K+1] g_hat."""
 
     def test_k1_dim(self):
-        assert manager_state_dim(1) == 11   # 6 + 5
+        assert manager_state_dim(1) == 18   # 8 + 2*5
 
     def test_k3_dim(self):
-        assert manager_state_dim(3) == 19   # 6 + 13
+        assert manager_state_dim(3) == 34   # 8 + 2*13
 
     def test_k1_build_manager_state_shape(self):
-        obs = np.zeros(31, dtype=np.float32)
+        obs = np.zeros(32, dtype=np.float32)
         lam = np.zeros(5, dtype=np.float32)
-        s_H = build_manager_state(obs, lam)
-        assert s_H.shape == (11,)
+        g_hat = np.zeros(5, dtype=np.float32)
+        s_H = build_manager_state(obs, lam, g_hat)
+        assert s_H.shape == (18,)
 
     def test_k3_build_manager_state_shape(self):
-        obs = np.zeros(51, dtype=np.float32)
+        obs = np.zeros(OBS_FIXED_BLOCK_LEN + OBS_PER_AMB_BLOCK_LEN * 3 + 1, dtype=np.float32)
         lam = np.zeros(13, dtype=np.float32)
-        s_H = build_manager_state(obs, lam)
-        assert s_H.shape == (19,)
+        g_hat = np.zeros(13, dtype=np.float32)
+        s_H = build_manager_state(obs, lam, g_hat)
+        assert s_H.shape == (34,)
 
     # ------------------------------------------------------------------
     # Sentinel layout tests: put a unique non-zero value in ONE source slot;
@@ -1006,7 +1016,7 @@ class TestManagerStateDim:
     # Catches: wrong index mapping, accidental slot aliasing, cross-contamination.
     # ------------------------------------------------------------------
 
-    def _sentinel_obs(self, obs_dim: int = 31) -> np.ndarray:
+    def _sentinel_obs(self, obs_dim: int = 32) -> np.ndarray:
         return np.zeros(obs_dim, dtype=np.float32)
 
     def _sentinel_lam(self, K: int = 1) -> np.ndarray:
@@ -1016,80 +1026,122 @@ class TestManagerStateDim:
         """rho_urllc → s_H[0], no other slot contaminated."""
         obs = self._sentinel_obs()
         obs[OBS_RHO_URLLC_IDX] = 0.91
-        s_H = build_manager_state(obs, self._sentinel_lam())
+        s_H = build_manager_state(obs, self._sentinel_lam(), self._sentinel_lam())
         assert s_H[0] == pytest.approx(0.91)
-        # All other non-severity slots should be 0 (severity zero-OH → sev_norm=(0+1)/5=0.2 only at idx 3)
-        for i in (1, 2, 4, 5):
+        # No active ambulance → severity_mean (s_H[4]) falls back to severity_ref
+        # (s_H[3]=0.2), by design — excluded from the contamination check below.
+        for i in (1, 2, 5):
             assert s_H[i] == pytest.approx(0.0), f"s_H[{i}] contaminated: {s_H[i]}"
-        np.testing.assert_allclose(s_H[6:], 0.0, atol=1e-6, err_msg="lambda slots contaminated")
+        assert s_H[4] == pytest.approx(s_H[3])
+        np.testing.assert_allclose(s_H[8:], 0.0, atol=1e-6, err_msg="lambda/g_hat slots contaminated")
 
     def test_sentinel_rho_embb_lands_only_at_s_H_1(self):
         obs = self._sentinel_obs()
         obs[OBS_RHO_EMBB_IDX] = 0.73
-        s_H = build_manager_state(obs, self._sentinel_lam())
+        s_H = build_manager_state(obs, self._sentinel_lam(), self._sentinel_lam())
         assert s_H[1] == pytest.approx(0.73)
-        for i in (0, 2, 4, 5):
+        for i in (0, 2, 5):
             assert s_H[i] == pytest.approx(0.0), f"s_H[{i}] contaminated"
+        assert s_H[4] == pytest.approx(s_H[3])  # severity_mean fallback, n_active=0
 
     def test_sentinel_bler_lands_only_at_s_H_2(self):
         obs = self._sentinel_obs()
         obs[OBS_BLER_IDX] = 0.18
-        s_H = build_manager_state(obs, self._sentinel_lam())
+        s_H = build_manager_state(obs, self._sentinel_lam(), self._sentinel_lam())
         assert s_H[2] == pytest.approx(0.18)
-        for i in (0, 1, 4, 5):
+        for i in (0, 1, 5):
             assert s_H[i] == pytest.approx(0.0), f"s_H[{i}] contaminated"
+        assert s_H[4] == pytest.approx(s_H[3])  # severity_mean fallback, n_active=0
 
     def test_sentinel_severity_oh_lands_only_at_s_H_3(self):
-        """obs[OBS_SEVERITY_OH_IDX + k] = 1.0 → sev_norm = (k+1)/5.0 at s_H[3].
-        All other scalar slots (0,1,2,4,5) must be 0.
+        """obs[OBS_SEVERITY_OH_IDX + k] = 1.0 → sev_ref_norm = (k+1)/5.0 at s_H[3].
+        No active ambulance is set, so severity_mean falls back to the same
+        value at s_H[4]; n_active_norm stays 0 at s_H[5]. Other scalars = 0.
         """
         for k in range(5):
             obs = self._sentinel_obs()
             obs[OBS_SEVERITY_OH_IDX + k] = 1.0
-            s_H = build_manager_state(obs, self._sentinel_lam())
+            s_H = build_manager_state(obs, self._sentinel_lam(), self._sentinel_lam())
             expected_sev_norm = (k + 1) / 5.0
             assert s_H[3] == pytest.approx(expected_sev_norm), (
                 f"OH slot {k}: s_H[3]={s_H[3]:.3f} != (k+1)/5={(k+1)/5.0:.3f}"
             )
-            for i in (0, 1, 2, 4, 5):
+            assert s_H[4] == pytest.approx(expected_sev_norm), (
+                "severity_mean must fall back to severity_ref when n_active=0"
+            )
+            for i in (0, 1, 2, 5):
                 assert s_H[i] == pytest.approx(0.0), f"k={k}: s_H[{i}] contaminated"
 
-    def test_sentinel_aoi_mean_lands_only_at_s_H_4(self):
+    def test_sentinel_severity_mean_over_active_only(self):
+        """K=3 with one active ambulance (severity_norm=0.6): severity_mean_norm
+        must equal that active xe's severity, NOT be diluted by the inactive
+        (zeroed) slots — and n_active_norm = 1/3."""
+        K = 3
+        obs = self._sentinel_obs(obs_dim=OBS_FIXED_BLOCK_LEN + OBS_PER_AMB_BLOCK_LEN * K + 1)
+        per_amb_0 = OBS_FIXED_BLOCK_LEN
+        obs[per_amb_0 + AMB_ACTIVE_OFFSET] = 1.0
+        obs[per_amb_0 + AMB_SEVERITY_NORM_OFFSET] = 0.6
+        lam = np.zeros(4 * K + 1, dtype=np.float32)
+        s_H = build_manager_state(obs, lam, lam)
+        assert s_H[4] == pytest.approx(0.6)
+        assert s_H[5] == pytest.approx(1.0 / 3.0)
+
+    def test_sentinel_aoi_mean_lands_only_at_s_H_6(self):
         obs = self._sentinel_obs()
         obs[OBS_AOI_MEAN_IDX] = 0.55
-        s_H = build_manager_state(obs, self._sentinel_lam())
-        assert s_H[4] == pytest.approx(0.55)
-        for i in (0, 1, 2, 5):
+        s_H = build_manager_state(obs, self._sentinel_lam(), self._sentinel_lam())
+        assert s_H[6] == pytest.approx(0.55)
+        for i in (0, 1, 2, 7):
             assert s_H[i] == pytest.approx(0.0), f"s_H[{i}] contaminated"
 
-    def test_sentinel_aoi_max_lands_only_at_s_H_5(self):
+    def test_sentinel_aoi_max_lands_only_at_s_H_7(self):
         obs = self._sentinel_obs()
         obs[OBS_AOI_MAX_IDX] = 0.88
-        s_H = build_manager_state(obs, self._sentinel_lam())
-        assert s_H[5] == pytest.approx(0.88)
-        for i in (0, 1, 2, 4):
+        s_H = build_manager_state(obs, self._sentinel_lam(), self._sentinel_lam())
+        assert s_H[7] == pytest.approx(0.88)
+        for i in (0, 1, 2, 6):
             assert s_H[i] == pytest.approx(0.0), f"s_H[{i}] contaminated"
 
-    def test_sentinel_lambda_k1_lands_at_s_H_6_to_10(self):
-        """lambda_global (5-dim K=1) → s_H[6:11]. Scalar slots [0:6] must stay 0."""
+    def test_sentinel_lambda_k1_lands_at_s_H_8_to_12(self):
+        """lambda_global (5-dim K=1) → s_H[8:13]. Scalar slots [0:8] must stay 0
+        (severity_mean at s_H[4] falls back to severity_ref at s_H[3], n_active=0)."""
         obs = self._sentinel_obs()
-        # Set one-hot so sev_norm ≠ 0 (expected), but verify scalar slots
+        from utils.config import LAMBDA_MAX
         lam = np.array([0.11, 0.22, 0.33, 0.44, 0.55], dtype=np.float32)
-        s_H = build_manager_state(obs, lam)
-        np.testing.assert_allclose(s_H[6:11], lam, atol=1e-6,
-            err_msg="lambda_global must appear at s_H[6:11]")
-        # Scalar slots should be 0 (severity zero → sev_norm = (0+1)/5 = 0.2 at [3])
-        for i in (0, 1, 2, 4, 5):
+        g_hat = np.zeros(5, dtype=np.float32)
+        s_H = build_manager_state(obs, lam, g_hat)
+        # λ normalized by LAMBDA_MAX (audit 2026-06-24); g_hat stays raw.
+        np.testing.assert_allclose(s_H[8:13], lam / LAMBDA_MAX, atol=1e-6,
+            err_msg="lambda_global/LAMBDA_MAX must appear at s_H[8:13]")
+        for i in (0, 1, 2, 5, 6, 7):
             assert s_H[i] == pytest.approx(0.0), f"s_H[{i}] contaminated by lambda"
+        assert s_H[4] == pytest.approx(s_H[3])
 
-    def test_sentinel_lambda_k3_lands_at_s_H_6_to_18(self):
-        """K=3: lambda (13-dim) → s_H[6:19]."""
-        obs = self._sentinel_obs(obs_dim=OBS_FIXED_BLOCK_LEN + OBS_PER_AMB_BLOCK_LEN * 3 + 1)
+    def test_sentinel_g_hat_k1_lands_at_s_H_13_to_17(self):
+        """g_hat (5-dim K=1) → s_H[13:18], distinct from lambda_global at [8:13]."""
+        obs = self._sentinel_obs()
+        lam = np.zeros(5, dtype=np.float32)
+        g_hat = np.array([-0.1, 0.2, -0.3, 0.4, -0.5], dtype=np.float32)
+        s_H = build_manager_state(obs, lam, g_hat)
+        np.testing.assert_allclose(s_H[13:18], g_hat, atol=1e-6,
+            err_msg="g_hat must appear at s_H[13:18]")
+        np.testing.assert_allclose(s_H[8:13], 0.0, atol=1e-6,
+            err_msg="lambda slots must not be contaminated by g_hat")
+
+    def test_sentinel_lambda_k3_lands_at_s_H_8_to_20(self):
+        """K=3: lambda (13-dim) → s_H[8:21]; g_hat (13-dim) → s_H[21:34]."""
+        K = 3
+        obs = self._sentinel_obs(obs_dim=OBS_FIXED_BLOCK_LEN + OBS_PER_AMB_BLOCK_LEN * K + 1)
+        from utils.config import LAMBDA_MAX
         lam = np.arange(1, 14, dtype=np.float32) * 0.05
-        s_H = build_manager_state(obs, lam)
-        assert s_H.shape == (19,)
-        np.testing.assert_allclose(s_H[6:19], lam, atol=1e-6,
-            err_msg="lambda_global (K=3) must appear at s_H[6:19]")
+        g_hat = np.arange(1, 14, dtype=np.float32) * -0.01
+        s_H = build_manager_state(obs, lam, g_hat)
+        assert s_H.shape == (34,)
+        # λ normalized by LAMBDA_MAX (audit 2026-06-24); g_hat raw/signed.
+        np.testing.assert_allclose(s_H[8:21], lam / LAMBDA_MAX, atol=1e-6,
+            err_msg="lambda_global/LAMBDA_MAX (K=3) must appear at s_H[8:21]")
+        np.testing.assert_allclose(s_H[21:34], g_hat, atol=1e-6,
+            err_msg="g_hat (K=3) must appear at s_H[21:34]")
 
     def test_build_manager_state_all_finite(self):
         env = ORANEnv(EnvConfig(K_ambulances=1))
@@ -1097,6 +1149,6 @@ class TestManagerStateDim:
         sev = int(info["severity"])
         ls = LambdaState(K=1)
         ls.reset_episode([sev], sev)
-        s_H = build_manager_state(obs, ls.get_lambda_global())
+        s_H = build_manager_state(obs, ls.get_lambda_global(), ls.get_deviation_hat())
         assert np.all(np.isfinite(s_H)), f"Manager state has non-finite: {s_H}"
         env.close()

@@ -53,9 +53,22 @@ class DeterministicActor(nn.Module):
         action_low: np.ndarray,
         action_high: np.ndarray,
         hidden: Sequence[int] = (256, 256),
+        zero_init_output: bool = False,
     ) -> None:
         super().__init__()
         self.net = _make_mlp(state_dim, hidden, action_dim)
+        if zero_init_output:
+            # Shared with WorkerActor (agents/worker_agent.py) — audit 2026-06-24,
+            # ĐX1 extended to TD3. Default nn.Linear init gives each of the K
+            # per-vehicle action dims a small random asymmetry that the
+            # deterministic policy gradient self-reinforces into a
+            # severity-blind PRB bias. Zeroing only the output layer makes
+            # net(obs) == 0 at init (all K dims tied) while keeping hidden
+            # layers' random init for feature learning. Only the Worker
+            # instance opts in (solvers/td3.py); the Manager's action_dim=1
+            # has no cross-dim bias to fix, so it keeps default init.
+            nn.init.zeros_(self.net[-1].weight)
+            nn.init.zeros_(self.net[-1].bias)
         self.register_buffer("action_low", torch.as_tensor(action_low, dtype=torch.float32))
         self.register_buffer("action_high", torch.as_tensor(action_high, dtype=torch.float32))
 
@@ -159,6 +172,7 @@ class TD3Agent:
         max_grad_norm: float = 1.0,
         device: str | torch.device = "cpu",
         seed: int | None = None,
+        zero_init_output: bool = False,
     ) -> None:
         if seed is not None:
             torch.manual_seed(seed)
@@ -167,13 +181,14 @@ class TD3Agent:
         self.action_low_np = np.asarray(action_low, dtype=np.float32)
         self.action_high_np = np.asarray(action_high, dtype=np.float32)
 
-        # Actor + target
+        # Actor + target (zero_init_output: audit 2026-06-24, ĐX1 — pass True
+        # only when this TD3Agent IS the Worker, see solvers/td3.py)
         self.actor = DeterministicActor(state_dim, action_dim,
                                          self.action_low_np, self.action_high_np,
-                                         hidden=hidden).to(self.device)
+                                         hidden=hidden, zero_init_output=zero_init_output).to(self.device)
         self.actor_target = DeterministicActor(state_dim, action_dim,
                                                 self.action_low_np, self.action_high_np,
-                                                hidden=hidden).to(self.device)
+                                                hidden=hidden, zero_init_output=zero_init_output).to(self.device)
         self.actor_target.load_state_dict(self.actor.state_dict())
         for p in self.actor_target.parameters():
             p.requires_grad_(False)

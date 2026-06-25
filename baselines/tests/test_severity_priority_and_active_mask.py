@@ -383,10 +383,12 @@ class TestP2RewardConstraintAggregation:
         """After enough dual updates, penalty ≈ reward magnitude."""
         from agents.lagrangian import LambdaState
         K = 1
+        # Use sev=5 (tightest): D_max=1ms=D_REF → per-severity scale = old scale,
+        # so the test's hardcoded c_vec/d_phi magnitudes match the normalization.
         ls = LambdaState(K=K, force_zero_warm=True)
-        ls.reset_episode((1,), 1)
+        ls.reset_episode((5,), 5)
 
-        reward_sum = 7.0  # typical SUM reward per Worker step
+        reward_sum = 7.0  # abstract base reward (LambdaState-only test; not env scale)
         c_vec = np.array([0.005, 0.01, 0.5, 0.05, -5.0])
         d_phi = np.array([0.001, 0.001, 0.1, 0.01, 0.0])
 
@@ -416,9 +418,9 @@ class TestP2RewardConstraintAggregation:
         Uses accelerated alpha to simulate long training convergence."""
         from agents.lagrangian import LambdaState
         K = 1
-        # Use 100× faster alpha to demonstrate convergence in fewer steps
+        # Use sev=5 (tightest) + 100× faster alpha to demonstrate convergence.
         ls = LambdaState(K=K, force_zero_warm=True, alpha_lambda=1e-2)
-        ls.reset_episode((1,), 1)
+        ls.reset_episode((5,), 5)
 
         c_vec = np.array([0.010, 0.05, 1.0, 0.1, -5.0])  # heavy violations
         d_phi = np.array([0.001, 0.001, 0.1, 0.01, 0.0])
@@ -437,21 +439,16 @@ class TestP2RewardConstraintAggregation:
         )
 
     def test_aggregation_documented(self):
-        """Document: reward = SUM(20 ticks), c_vec = MEAN(20 ticks).
-        This is NOT a bug — it's a scale choice absorbed by λ."""
+        """Document: reward = MEAN(20 ticks), c_vec = MEAN(20 ticks) — MATCHED
+        per-tick basis (audit 2026-06-23). The augmented Lagrangian r − Σλⱼ·gⱼ
+        is balanced; no 20× scale gap for λ to compensate."""
         env, _, _ = _make_env(K=1, seed=0)
         env.set_rrm_budget(0.20)
         _, rew, _, _, info = env.step(np.zeros(1, dtype=np.float32))
 
-        # Reward is SUM of 20 MAC ticks
-        per_tick = rew / MAC_TICKS_PER_WORKER
-        assert 0.05 < per_tick < 2.0, f"per_tick_reward={per_tick}"
+        # Reward is the per-tick MEAN log-utility (NOT a ×20 sum).
+        assert 0.0 < rew < 2.0, f"reward={rew} looks like a SUM, not per-tick MEAN"
 
-        # c_vec C1 is MEAN delay (seconds)
+        # c_vec C1 is MEAN delay (seconds) — same basis as reward
         c_vec = info["c_vec"]
         assert 0.0 <= c_vec[0] < 0.01, f"C1={c_vec[0]} not mean-scale"
-
-        # Scale ratio: reward is ~20× larger than if it were per-tick MEAN
-        # This 20:1 ratio is compensated by λ learning at a proportional magnitude
-        scale_ratio = MAC_TICKS_PER_WORKER  # = 20
-        assert scale_ratio == 20

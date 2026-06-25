@@ -36,7 +36,7 @@ from utils.config import (
     SEVERITY_OH_OBS_INDEX,
 )
 
-OBS_DIM_K1 = 31  # 20 + 10*1 + 1 (F=1)
+OBS_DIM_K1 = 32  # 20 + 11*1 + 1 (F=1, incl. active_mask_k)
 
 
 # ============================================================
@@ -47,17 +47,21 @@ OBS_DIM_K1 = 31  # 20 + 10*1 + 1 (F=1)
 def test_build_manager_state_shape():
     obs = np.zeros(OBS_DIM_K1, dtype=np.float32)
     lam = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float64)  # (4*1+1,)
-    s_H = build_manager_state(obs, lam)
-    assert s_H.shape == (11,)  # 6 + (4K+1) = 6+5 at K=1
+    g_hat = np.zeros(5, dtype=np.float64)
+    s_H = build_manager_state(obs, lam, g_hat)
+    assert s_H.shape == (18,)  # 8 + 2*(4K+1) = 8+10 at K=1
     assert s_H.dtype == np.float32
 
 
 def test_build_manager_state_includes_lambda():
     obs = np.zeros(OBS_DIM_K1, dtype=np.float32)
     lam = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float64)
-    s_H = build_manager_state(obs, lam)
-    # λ_global occupies tail (4K+1)=5 slots
-    np.testing.assert_array_almost_equal(s_H[-5:], lam, decimal=5)
+    g_hat = np.array([0.1, 0.2, 0.3, 0.4, 0.5], dtype=np.float64)
+    s_H = build_manager_state(obs, lam, g_hat)
+    # λ_global/LAMBDA_MAX occupies [8:13], g_hat (raw) occupies the trailing [13:18] slots
+    from utils.config import LAMBDA_MAX
+    np.testing.assert_array_almost_equal(s_H[8:13], lam / LAMBDA_MAX, decimal=5)
+    np.testing.assert_array_almost_equal(s_H[13:18], g_hat, decimal=5)
 
 
 def test_build_manager_state_phase_normalized():
@@ -65,7 +69,8 @@ def test_build_manager_state_phase_normalized():
     obs = np.zeros(OBS_DIM_K1, dtype=np.float32)
     obs[SEVERITY_OH_OBS_INDEX + 2] = 1.0  # severity_ref = 3 (one-hot index 2)
     lam = np.zeros(5)
-    s_H = build_manager_state(obs, lam)
+    g_hat = np.zeros(5)
+    s_H = build_manager_state(obs, lam, g_hat)
     assert s_H[3] == pytest.approx(3 / 5)
 
 
@@ -168,6 +173,7 @@ def test_5_episode_smoke_no_nan(tmp_path):
         n_episodes=5,
         seed=0,
         log_dir=str(tmp_path / "logs"),
+        checkpoint_dir=str(tmp_path / "logs" / "checkpoints"),
         print_every=10_000,
         checkpoint_every=0,
         hard_mission=False,
@@ -200,6 +206,7 @@ def test_k1_skips_worker_actor_update(tmp_path):
         n_episodes=2,
         seed=0,
         log_dir=str(tmp_path / "logs_k1"),
+        checkpoint_dir=str(tmp_path / "logs_k1" / "checkpoints"),
         print_every=10_000,
         checkpoint_every=0,
         hard_mission=False,
@@ -222,6 +229,7 @@ def test_k3_does_not_skip_worker_actor_update(tmp_path):
         n_episodes=2,
         seed=0,
         log_dir=str(tmp_path / "logs_k3"),
+        checkpoint_dir=str(tmp_path / "logs_k3" / "checkpoints"),
         print_every=10_000,
         checkpoint_every=0,
         hard_mission=False,
@@ -243,6 +251,7 @@ def test_5_episode_lambda_global_non_trivial(tmp_path):
         n_episodes=5,
         seed=0,
         log_dir=str(tmp_path / "logs"),
+        checkpoint_dir=str(tmp_path / "logs" / "checkpoints"),
         print_every=10_000,
         checkpoint_every=0,
     )
@@ -271,6 +280,7 @@ def test_ppo_buffer_resets_each_episode(tmp_path):
         n_episodes=2,
         seed=1,
         log_dir=str(tmp_path / "logs"),
+        checkpoint_dir=str(tmp_path / "logs" / "checkpoints"),
         print_every=10_000,
         checkpoint_every=0,
     )

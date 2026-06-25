@@ -21,12 +21,12 @@
 | M8.3 | R_REF=100Mbps | 🟡 | `Weijian Zhou` §IV; sweep {50,100,200,300} |
 | M11.1 | ATS 5-level triage scale | ✅ | `ATS — Australasian College for Emergency Medicine (ACEM)` |
 | M11.2 | `severity_per_amb` exogenous per-ambulance, cố định/episode + sampling weights; `severity_ref:=max(severity_per_amb)` cho đại lượng shared | 🔴 | abstraction + sensitivity (CTMC/birth-death + phase-event MAP loại bỏ — severity cố định/episode) |
-| M11.6 | `severity_per_amb`→priority (β/Π_feasible weight-ordering, K≥2) | 🔴 | design principle (ATS triage analogy) |
+| M11.6 | `severity_per_amb`→priority (pure-RL per-vehicle logits + λ-penalty gradient, K≥2 — KHÔNG còn β/Π_feasible weight-ordering, gỡ 2026-06-21) | 🔴 | design principle (ATS triage analogy) |
 | P1.1 | objective eMBB log-utility | ✅ | `Alsenwi 2022` Eq.13; `Sohaib 2024` Eq.9 |
 | P2.1 | CMDP framework | ✅ | `Yongshuai Liu 2020`; `Wen Wu 2020`; `Qiang Liu 2021` *(KHÔNG Altman)* |
 | P4.1 | Lagrangian dual ascent | ✅ | `Spoor 2025`; `Ding 2023` *(KHÔNG Boyd/Tessler)* |
 | §1.3 | PRB_min^QoS (Option B floor) | 🟡 | thủ tục nghịch đảo M3→M4/M6/M8 (W13) |
-| §1.3 | κ, γ_max/β_max, ρ, β_min | 🔴 | sweep declared (no medical ref) |
+| §1.3 | κ, γ_max/β_max, ρ, β_min | 🔴 | sweep declared (no medical ref); **β_max/β_min nay LEGACY/unused** trong intra-slice allocation (gỡ 2026-06-21, giữ constant chỉ để import/test compat) |
 | §1.4 | λ_c init/α/clip `(4K+1,)` | ✅ | reuse ALPHA_LAMBDA_DUAL=1e-4, LAMBDA_MAX=10; C6 = structural metric (no λ_C6) |
 | A1.1/1.2 | PPO; GAE | ✅ | `1707.06347v2`; `Foundations_of_Deep_RL` *(Schulman 2016 vắng corpus)* |
 | A2.1 | two-timescale HRL | ✅ | `Akyıldız 2024` *(Borkar/FeUdal vắng corpus)* |

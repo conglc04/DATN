@@ -11,7 +11,7 @@ import pytest
 
 def test_package_imports():
     """All scaffolded packages must be importable."""
-    for pkg in ("env", "agents", "solvers", "experiments", "utils"):
+    for pkg in ("env", "agents", "solvers", "utils"):
         importlib.import_module(pkg)
 
 

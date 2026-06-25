@@ -244,18 +244,22 @@ class TestPoint4MetricsAfterPatch:
 # ═══════════════════════════════════════════════════════════════════════
 
 class TestPoint5RewardConstraintScaling:
-    """Verify reward is SUM and c_vec is MEAN across MAC ticks."""
+    """Verify reward is MEAN and c_vec is MEAN across MAC ticks (matched basis)."""
 
-    def test_reward_is_sum_of_ticks(self):
-        """reward returned by step() should be sum of 20 MAC-tick rewards."""
+    def test_reward_is_mean_of_ticks(self):
+        """reward returned by step() should be the MEAN of 20 MAC-tick rewards.
+
+        Reward and c_vec share the same per-tick MEAN basis so the augmented
+        Lagrangian r − Σλⱼ·gⱼ is balanced (audit 2026-06-23: SUM basis made
+        the eMBB reward gradient swamp the constraint penalty → URLLC starvation).
+        """
         env, _, _ = _make_env(K=1, seed=0)
         env.set_rrm_budget(0.20)
         _, rew, _, _, _ = env.step(np.zeros(1, dtype=np.float32))
-        # Each tick reward = alpha_e * log(1 + R_eMBB/100)
-        # With eMBB ~200 Mbps, reward ~0.3 * log(3) ≈ 0.33 per tick
-        # Sum over 20 ticks ≈ 6.6
-        assert rew > 1.0, f"reward={rew} seems like per-tick not sum"
-        assert rew < 30.0, f"reward={rew} unreasonably large"
+        # Each tick reward = log(1 + R_eMBB/100); with eMBB ~200 Mbps ≈ 1.1/tick.
+        # MEAN over ticks stays per-tick scale, NOT ×20.
+        assert rew > 0.0, f"reward={rew} should be positive"
+        assert rew < 2.0, f"reward={rew} looks like a SUM (should be per-tick MEAN)"
 
     def test_c_vec_is_mean_of_ticks(self):
         """c_vec should be normalized by active tick count."""
@@ -284,10 +288,11 @@ class TestPoint5RewardConstraintScaling:
         r_aug_0 = ls.augmented_reward(rew, c_vec, d_phi)
         assert r_aug_0 == pytest.approx(rew, abs=1e-6)
 
-        # Document: reward is SUM(20 ticks), penalty is dot(λ, MEAN(20 ticks))
-        # This is intentional — λ compensates for the 20x scaling gap.
-        per_tick_reward_est = rew / MAC_TICKS_PER_WORKER
-        assert per_tick_reward_est > 0.05  # sanity
+        # Document: reward is MEAN(20 ticks), penalty is dot(λ, MEAN(20 ticks))
+        # — both on the SAME per-tick basis (audit 2026-06-23: matched basis so
+        # the augmented Lagrangian is balanced; no 20× scaling gap to compensate).
+        # rew IS the per-tick mean log-utility (~0.5-1.1), no further /20.
+        assert 0.0 < rew < 2.0  # per-tick MEAN scale (a SUM would be ~10-24)
 
 
 # ═══════════════════════════════════════════════════════════════════════

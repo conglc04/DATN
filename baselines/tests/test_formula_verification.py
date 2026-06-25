@@ -241,42 +241,48 @@ class TestSoftmaxExpit:
 
 
 # ============================================================
-# G. Reward — exact α_e(sev)·log(1 + R/R_REF)
+# G. Reward — pure log(1 + R/R_REF), NO α_e (removed 2026-06-23)
 # ============================================================
 
 class TestRewardFormula:
-    def test_exact_reward_value(self):
-        """Single-term reward equals α_e(sev)·log1p(R / R_REF) exactly."""
+    def test_reward_has_no_alpha_e_weight(self):
+        """Reward is the per-tick MEAN of log1p(R/R_REF) — NO α_e weight.
+
+        Verifies against the ACTUAL env reward: severity differentiation is
+        entirely via constraints, so the reward must be invariant to severity
+        at a fixed throughput (α_e removed). Compares sev=1 vs sev=5 reward
+        with the same pinned eMBB throughput → must be EQUAL.
+        """
         from env.oran_env import EnvConfig, ORANEnv
-        from utils.config import R_REF_EMBB_MBPS, get_severity_alpha
-        env = ORANEnv(EnvConfig(K_ambulances=1, initial_severity=3))
-        env.reset(seed=0)
-        # Force a deterministic eMBB throughput by pinning the queue
-        q = env.queues["eMBB"]
-        q.set_arrival_rate(1e9)         # saturate so served = service_rate
-        q.service_rate = 50e6 / q.mean_packet_bits   # 50 Mbps worth of pkts/s
-        r_embb = env._compute_embb_throughput_mbps()
-        _, alpha_e = get_severity_alpha(3)
-        expected_reward = alpha_e * math.log(1.0 + r_embb / R_REF_EMBB_MBPS)
-        # Reconstruct the reward term from the same R it would see this tick
-        got = alpha_e * math.log(1.0 + r_embb / R_REF_EMBB_MBPS)
-        assert got == pytest.approx(expected_reward, rel=1e-12)
-        # And R is finite/positive (throughput model sanity)
-        assert r_embb > 0.0
-        env.close()
+
+        def _pinned_reward(sev: int) -> float:
+            env = ORANEnv(EnvConfig(K_ambulances=1, initial_severity=sev,
+                                    sample_severity=False))
+            env.reset(seed=0)
+            env.set_rrm_budget(0.20)
+            _, rew, _, _, _ = env.step(np.zeros(1, dtype=np.float32))
+            env.close()
+            return float(rew)
+
+        r_sev1 = _pinned_reward(1)
+        r_sev5 = _pinned_reward(5)
+        # Same seed/budget → same throughput trace → reward must match (no α_e).
+        assert r_sev1 == pytest.approx(r_sev5, rel=1e-9), (
+            f"reward differs by severity (r1={r_sev1}, r5={r_sev5}) — α_e leaked back in"
+        )
+        # Per-tick MEAN scale (not a ×20 sum), strictly positive.
+        assert 0.0 < r_sev1 < 2.0
 
     def test_reward_zero_when_no_throughput(self):
-        """R_eMBB = 0 → log1p(0) = 0 → reward = 0 regardless of α_e."""
-        from utils.config import R_REF_EMBB_MBPS, get_severity_alpha
-        _, alpha_e = get_severity_alpha(1)
-        assert alpha_e * math.log(1.0 + 0.0 / R_REF_EMBB_MBPS) == 0.0
+        """R_eMBB = 0 → log1p(0) = 0 → reward = 0 (pure log-utility, no α_e)."""
+        from utils.config import R_REF_EMBB_MBPS
+        assert math.log(1.0 + 0.0 / R_REF_EMBB_MBPS) == 0.0
 
     def test_reward_monotone_increasing_in_throughput(self):
-        """Higher R_eMBB → strictly higher reward (log is strictly increasing)."""
-        from utils.config import R_REF_EMBB_MBPS, get_severity_alpha
-        _, alpha_e = get_severity_alpha(3)
-        r_lo = alpha_e * math.log(1.0 + 10.0 / R_REF_EMBB_MBPS)
-        r_hi = alpha_e * math.log(1.0 + 50.0 / R_REF_EMBB_MBPS)
+        """Higher R_eMBB → strictly higher reward (log strictly increasing, no α_e)."""
+        from utils.config import R_REF_EMBB_MBPS
+        r_lo = math.log(1.0 + 10.0 / R_REF_EMBB_MBPS)
+        r_hi = math.log(1.0 + 50.0 / R_REF_EMBB_MBPS)
         assert r_hi > r_lo
 
 
@@ -305,27 +311,27 @@ class TestSeverityMonotonicity:
         assert all(e[i] >= e[i + 1] for i in range(4))
 
     def test_alpha_embb_strictly_decreasing(self):
-        """eMBB reward weight strictly drops as severity rises (URLLC prioritized)."""
+        """SEVERITY_ALPHA['embb'] reference table strictly drops as severity rises.
+        NOTE: α_e is REFERENCE-ONLY (removed from reward 2026-06-23); this just
+        locks the historical table values, not a live reward weight."""
         from utils.config import SEVERITY_ALPHA
         ae = [SEVERITY_ALPHA[s]["embb"] for s in range(1, 6)]
         assert all(ae[i] > ae[i + 1] for i in range(4))
 
     def test_alpha_pair_sums_to_one(self):
+        """SEVERITY_ALPHA reference table invariant (urllc+embb=1); reference-only."""
         from utils.config import SEVERITY_ALPHA
         for s in range(1, 6):
             assert SEVERITY_ALPHA[s]["urllc"] + SEVERITY_ALPHA[s]["embb"] == pytest.approx(1.0)
 
     def test_cmdp_embb_floor_fixed_across_severity(self):
         """eMBB throughput floor is a FIXED severity-independent 10 Mbps SLA
-        (formulation-audit Gate 7, 2026-06-20). Decoupling C3 from severity avoids
-        the reward↔C3 contradiction: the reward already deprioritizes eMBB at high
-        severity (SEVERITY_ALPHA['embb'] still decreasing), so a severity-keyed or
-        high floor would fight the reward. C3 is a clean starvation safety net."""
-        from utils.config import CMDP_D_J_SEVERITY, SEVERITY_ALPHA
+        (formulation-audit Gate 7, 2026-06-20). C3 decoupled from severity keeps
+        it a clean starvation safety net rather than a severity-keyed target that
+        would fight the constraint-driven b_rrm increase at high severity."""
+        from utils.config import CMDP_D_J_SEVERITY
         d3 = [CMDP_D_J_SEVERITY[s]["d3_embb_mbps"] for s in range(1, 6)]
-        ae = [SEVERITY_ALPHA[s]["embb"] for s in range(1, 6)]
         assert d3 == [10.0] * 5, f"d3 must be a fixed 10 Mbps floor: {d3}"
-        assert all(ae[i] > ae[i + 1] for i in range(4))        # α_embb still ↓ (reward decoupled from C3)
 
     def test_lambda_warm_mean_non_decreasing(self):
         """Warm-start dual magnitude rises with severity (tighter constraints)."""

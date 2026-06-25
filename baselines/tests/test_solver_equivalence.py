@@ -61,7 +61,7 @@ class TestSharedProblemDefinition:
 
     def test_manager_state_dim_formula(self):
         for K in (1, 3):
-            assert manager_state_dim(K) == 6 + (4 * K + 1)
+            assert manager_state_dim(K) == 8 + 2 * (4 * K + 1)
 
     def test_decode_manager_action_shared_bounds(self):
         from utils.config import B_RRM_MIN, B_RRM_MAX

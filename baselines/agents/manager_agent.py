@@ -47,15 +47,19 @@ MANAGER_ACTION_DIM_DEFAULT: int = 1
 
 
 def manager_state_dim(K: int) -> int:
-    """Manager state dim = 6 fixed scalars + (4K+1)-dim lambda_global.
+    """Manager state dim = 8 fixed scalars + λ_global (4K+1) + g_hat (4K+1).
 
-    Fixed block: [rho_urllc, rho_emBB, bler, severity_ref_idx, aoi_mean, aoi_max].
-    At K=1 this is 6 + 5 = 11 (numerically identical to the legacy 11-dim state).
+    Fixed block (8): [rho_urllc, rho_emBB, bler, severity_ref_norm,
+    severity_mean_norm, n_active_norm, aoi_mean, aoi_max]. Then the dual PRICE
+    λ_global (4K+1) AND the current constraint RESIDUAL g_hat (4K+1) — the Manager
+    must observe the residual its augmented reward penalizes (audit 2026-06-23,
+    see solvers/_common.build_manager_state). Total = 8 + 2·(4K+1) = 10 + 8K.
+    At K=1 this is 18; at K=3 it is 34.
     """
-    return 6 + (4 * K + 1)
+    return 8 + 2 * (4 * K + 1)
 
 
-MANAGER_STATE_DIM_DEFAULT: int = manager_state_dim(1)  # 11 (K=1)
+MANAGER_STATE_DIM_DEFAULT: int = manager_state_dim(1)  # 18 (K=1)
 
 
 def _make_mlp(in_dim: int, hidden: Sequence[int], out_dim: int) -> nn.Sequential:
@@ -126,8 +130,10 @@ def decode_manager_action(action_raw: np.ndarray) -> dict[str, float]:
 class ManagerAgent:
     """Manager (high-level, 100 ms) — Gaussian PPO actor-critic with γ_H ≈ 0.904 (N1).
 
-    State_dim default = 11 (W07 placeholder; finalize in W08 with explicit
-    multi-cell aggregator).
+    State_dim default = MANAGER_STATE_DIM_DEFAULT = manager_state_dim(1) = 18
+    (8 fixed + 2·(4K+1) = λ_global + g_hat; see manager_state_dim docstring).
+    Drivers pass manager_state_dim(K) explicitly, so this default only covers
+    the K=1 single-cell case.
     """
 
     def __init__(

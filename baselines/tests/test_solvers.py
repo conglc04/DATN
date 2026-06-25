@@ -200,13 +200,14 @@ class TestPhaseFlagSemantics:
 class TestSmokeTrainOneEpisode:
     """Gate P3 prep: each main baseline runs 1 episode without crash."""
 
-    def _run_one(self, baseline_name):
+    def _run_one(self, baseline_name, tmp_path):
         from solvers.train_offpolicy import train
         stats = train(
             baseline_name=baseline_name,
             n_episodes=1,
             seed=0,
-            log_dir="logs/_smoke_unittest",
+            log_dir=str(tmp_path / "smoke_unittest"),
+            checkpoint_dir=str(tmp_path / "smoke_unittest" / "checkpoints"),
             initial_severity=3,
             print_every=10_000,           # silence
         )
@@ -214,10 +215,10 @@ class TestSmokeTrainOneEpisode:
         assert np.isfinite(stats["ep_reward"])
         assert np.isfinite(stats["mean_e2e_ms"])
 
-    def test_sac(self):
+    def test_sac(self, tmp_path):
         """SAC — Phase 3 sibling solver (5-dim λ via LambdaState)."""
-        self._run_one("sac")
+        self._run_one("sac", tmp_path)
 
-    def test_td3(self):
+    def test_td3(self, tmp_path):
         """TD3 — Phase 3 sibling solver (5-dim λ via LambdaState)."""
-        self._run_one("td3")
+        self._run_one("td3", tmp_path)

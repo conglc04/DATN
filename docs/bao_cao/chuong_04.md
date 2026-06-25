@@ -9,13 +9,15 @@ Trạng thái $s$ mô tả tình trạng hàng đợi/kênh/AoI/severity/đối 
 
 ## 4.2. Hàm mục tiêu (eMBB log‑utility)
 
-Phần thưởng **một số hạng**, chỉ theo eMBB, có trọng số theo severity tham chiếu:
+Phần thưởng **một số hạng, thuần eMBB** (không có trọng số severity):
 
-$$\boxed{\;r_t=\alpha_e(\text{sev}_{\text{ref}})\cdot\log\!\Big(1+\frac{R_{\text{eMBB},t}}{R_{\text{REF}}}\Big),\quad R_{\text{REF}}=100\text{ Mbps},\ \ \text{sev}_{\text{ref}}=\max_k\text{sev}_k\;}$$
+$$\boxed{\;r_t=\operatorname*{mean}_{\text{tick}\in t}\log\!\Big(1+\frac{R_{\text{eMBB},t}}{R_{\text{REF}}}\Big),\quad R_{\text{REF}}=100\text{ Mbps}\;}$$
 
-[Alsenwi 2022 Eq.13; Sohaib 2024 Eq.9]. **Vai trò của $\alpha_e$:** chỉ là trọng số *giá trị biên của eMBB*; URLLC **không** xuất hiện trong phần thưởng mà được bảo vệ hoàn toàn qua ràng buộc $\lambda$ (tránh đếm trùng). Do $\alpha_e$ giảm theo severity (0.70→0.05), khi bệnh nhân nặng hơn, hệ thống "ít coi trọng" eMBB hơn ⟹ dồn PRB cho URLLC.
+[Alsenwi 2022 Eq.13; Sohaib 2024 Eq.9]. **Không dùng trọng số $\alpha_e$** (bỏ 2026‑06‑23): URLLC **không** xuất hiện trong phần thưởng mà được bảo vệ hoàn toàn qua ràng buộc $\lambda$. Việc phân biệt severity được thực thi **hoàn toàn qua các ràng buộc C1–C5** (ngưỡng QoS chặt dần theo severity) **và dual ascent $\lambda$**, *không* qua trọng số phần thưởng. Trọng số $\alpha_e$ trước đây gây **đếm trùng**: ràng buộc đã ép tăng ngân sách URLLC ở severity cao, nên $\alpha_e$ là dư thừa và còn che mờ tín hiệu gradient của Manager (ở sev=5, $\alpha_e=0.05$ làm phần thưởng ≈ 0).
 
-**Vì sao lấy $\max$ (lựa chọn mô hình tường minh, $K\ge2$):** mục tiêu là một vô hướng duy nhất, nên trọng số $\alpha_e$ phải gộp $K$ mức về một. Lấy **max** = bệnh nhân nguy kịch nhất trong cell: ngay khi *một* xe ở mức nặng, eMBB bị hạ ưu tiên xuống mức đó (thiên về bệnh nhân — bảo thủ nhất). Đây không phải "một severity đại diện không định nghĩa": **QoS riêng từng xe vẫn được thực thi per‑vehicle** qua $\text{sev}_k$ trong C1/C2/C4/C5 và $\lambda$ per‑xe; chỉ trọng số reward chung + sàn C3 + one‑hot dùng max. Phương án mean/weighted‑sum bị loại vì làm loãng ưu tiên của bệnh nhân nguy kịch duy nhất.
+**Phần thưởng lấy TRUNG BÌNH theo MAC tick (không lấy tổng).** Vector ràng buộc $c_{\text{vec}}$ là **trung bình per‑tick** (tỉ lệ trễ, tỉ lệ vi phạm, AoI), nên phần thưởng phải cùng cơ sở thời gian để Lagrange tăng cường $r-\sum_j\lambda_j g_j$ được **cân bằng**. Cơ sở SUM‑vs‑MEAN lệch nhau ($\times 20$, do mỗi bước Worker chứa 20 MAC tick) khiến gradient phần thưởng eMBB ($\approx +0.21$ khi giảm $b_{\text{rrm}}$ trên cơ sở trung bình, nhưng $\approx +4.2$ trên cơ sở tổng) **nuốt** gradient phạt ràng buộc ($\approx +1.0$ ngay cả ở sev=5 với $\lambda$ bão hòa) ⟹ Manager bỏ đói URLLC. Với cơ sở MEAN, NET khi giảm $b_{\text{rrm}}$ là âm ở sev=5 (URLLC được bảo vệ) nhưng dương ở sev=1 (nhường tài nguyên cho eMBB) ⟹ **thứ tự ưu tiên theo severity tự xuất hiện, không cần sàn cứng** (audit 2026‑06‑23).
+
+**Vì sao lấy $\max$ cho đại lượng dùng chung ($K\ge2$):** một số đại lượng vô hướng dùng chung (one‑hot severity, sàn C3) phải gộp $K$ mức về một; lấy **max** = bệnh nhân nguy kịch nhất trong cell. **QoS riêng từng xe vẫn được thực thi per‑vehicle** qua $\text{sev}_k$ trong C1/C2/C4/C5 và $\lambda$ per‑xe; chỉ one‑hot dùng chung + sàn C3 dùng max. Phương án mean/weighted‑sum bị loại vì làm loãng ưu tiên của bệnh nhân nguy kịch duy nhất.
 
 ## 4.3. Năm họ ràng buộc C1–C5 và vector $(4K+1)$ chiều
 

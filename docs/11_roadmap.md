@@ -8,6 +8,7 @@ B0/B0b (gỡ LSTM+MEC+vital+β_qp)
    └─► B1 (references nền + audit config.py/REFERENCE_MAP)  ─► B4 (formulation CMDP)
 B2 (severity.py — ATS) ┐
 B3 (sumo_mobility.py) ─┴─► B5 (oran_env K≥2 + intra-slice + Π_feasible projection + assert obs 32/54)
+                            [outcome 2026-06-21: Π_feasible projection gỡ → pure-RL softmax, xem EQUATION_TO_CODE_LEDGER.md]
                             ├─► W18 PPO K=1 ─► W19 PPO K=3
                             ├─► B6 (TD3, đã có) ─► W20 TD3 K=1 ─► W21 TD3 K=3
                             └─► B7 (SAC, NEW) ─► W22 SAC K=1 ─► W23 SAC K=3 (Table I/II)

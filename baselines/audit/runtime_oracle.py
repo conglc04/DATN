@@ -38,7 +38,6 @@ from utils.config import (
     WORKER_STEPS_PER_MANAGER,
     build_d_phi_vector,
     build_dual_scales,
-    get_severity_alpha,
 )
 
 TOL = 1e-6
@@ -126,15 +125,13 @@ def run_window(K: int, severity_per_amb, seed: int) -> list:
     print(f"  lambda_pre [0:3]={lam_pre[:3]}")
     print(f"  lambda_post[0:3]={lam_new_code[:3]}  (indep={lam_new_indep[:3]})")
 
-    # Reward base FORM check (last MAC tick): r_tick = alpha_e(sev_ref)*log(1+R_eMBB/R_REF).
-    # Note: env step() reward is the SUM over 20 MAC ticks; this verifies the
-    # single-term FORMULA against the last tick's R_eMBB snapshot.
+    # Reward base FORM check (last MAC tick): r_tick = log(1+R_eMBB/R_REF).
+    # No α_e — severity differentiation is entirely via constraints C1–C5.
     sev_ref = max(severity_per_amb)
-    _, alpha_e = get_severity_alpha(sev_ref)
     r_embb = env._compute_embb_throughput_mbps()
-    r_tick_indep = alpha_e * math.log(1.0 + r_embb / R_REF_EMBB_MBPS)
-    print(f"  reward-form (last tick): alpha_e={alpha_e:.3f}  R_eMBB={r_embb:.2f}Mbps  "
-          f"r_tick_indep={r_tick_indep:+.5f}  (window reward = sum of 20 ticks)")
+    r_tick_indep = math.log(1.0 + r_embb / R_REF_EMBB_MBPS)
+    print(f"  reward-form (last tick): R_eMBB={r_embb:.2f}Mbps  "
+          f"r_tick_indep={r_tick_indep:+.5f}  (window reward = MEAN of 20 ticks)")
 
     return failures
 

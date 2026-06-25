@@ -52,6 +52,7 @@ class GaussianTanhActor(nn.Module):
         action_low: np.ndarray,
         action_high: np.ndarray,
         hidden: Sequence[int] = (256, 256),
+        zero_init_output: bool = False,
     ) -> None:
         super().__init__()
         prev = state_dim
@@ -63,6 +64,19 @@ class GaussianTanhActor(nn.Module):
         self.trunk = nn.Sequential(*layers)
         self.mean_head = nn.Linear(prev, action_dim)
         self.log_std_head = nn.Linear(prev, action_dim)
+        if zero_init_output:
+            # Shared with WorkerActor (agents/worker_agent.py) — audit
+            # 2026-06-24, ĐX1 extended to SAC. Default nn.Linear init gives
+            # each of the K per-vehicle mean-action dims a small random
+            # asymmetry that the policy gradient self-reinforces into a
+            # severity-blind PRB bias. Zero only mean_head (the mean-bias
+            # analog of WorkerActor.mean_net's output layer) — leave
+            # log_std_head untouched, matching WorkerActor where log_std is
+            # already a state-independent constant, never randomly biased.
+            # Only the Worker instance opts in (solvers/sac.py); the
+            # Manager's action_dim=1 has no cross-dim bias to fix.
+            nn.init.zeros_(self.mean_head.weight)
+            nn.init.zeros_(self.mean_head.bias)
         self.register_buffer("action_low", torch.as_tensor(action_low, dtype=torch.float32))
         self.register_buffer("action_high", torch.as_tensor(action_high, dtype=torch.float32))
 
@@ -128,6 +142,7 @@ class SACAgent:
         max_grad_norm: float = 1.0,
         device: str | torch.device = "cpu",
         seed: int | None = None,
+        zero_init_output: bool = False,
     ) -> None:
         if seed is not None:
             torch.manual_seed(seed)
@@ -136,9 +151,12 @@ class SACAgent:
         self.action_low_np = np.asarray(action_low, dtype=np.float32)
         self.action_high_np = np.asarray(action_high, dtype=np.float32)
 
-        # Actor (stochastic, no target network needed)
+        # Actor (stochastic, no target network needed). zero_init_output:
+        # audit 2026-06-24, ĐX1 — pass True only when this SACAgent IS the
+        # Worker (see solvers/sac.py).
         self.actor = GaussianTanhActor(
-            state_dim, action_dim, self.action_low_np, self.action_high_np, hidden=hidden
+            state_dim, action_dim, self.action_low_np, self.action_high_np,
+            hidden=hidden, zero_init_output=zero_init_output,
         ).to(self.device)
 
         # Twin critics + targets

@@ -85,8 +85,12 @@ D_STOCH: Final[float] = 0.05e-3         # Stochastic RLC + retx mean (in M/G/1 �
                                          # align với docs/13 §1.3 (internal review M2: D_stoch ~ Uniform(0, 2·0.05ms)
                                          # → E[D_stoch] = 0.05 ms). Old value 0.15e-3 mâu thuẫn với
                                          # service-time distribution specification.
-SAFETY_QP_PERIOD: Final[float] = 10e-3  # xApp QP control cycle
-ODU_LOCAL_CHECK: Final[float] = 0.5e-3  # O-DU local 1-TTI check
+# NOTE: control-plane constants SAFETY_QP_PERIOD (xApp QP cycle) and
+# ODU_LOCAL_CHECK (O-DU 1-TTI check) were REMOVED 2026-06-24 — leftovers from the
+# gone Safety-NSF/QP mechanism, never referenced in any delay path. They must NOT
+# re-enter D_e2e: user-plane packet latency (D_DET+d_tx+d_queue+D_FH+D_BH) is the
+# data path only; the HRL/RIC control loop (Manager 100ms / Worker 10ms over E2)
+# is a separate control plane and is deliberately excluded (no plane mixing).
 
 # ============================================================
 # Severity QoS table (5-level patient-urgency tier — replaces the old 5-phase
@@ -115,9 +119,9 @@ ODU_LOCAL_CHECK: Final[float] = 0.5e-3  # O-DU local 1-TTI check
 # design, NOT a bug; audit 2026-06-20). Every column is MONOTONICALLY tighter
 # (non-increasing) with severity, so the 5 levels form a strict QoS hierarchy
 # with no contradiction. The five levels are FULLY distinguished by D_max
-# (20/10/5/2/1 ms, 5 distinct) and by the reward weight α_e (SEVERITY_ALPHA,
-# 0.70→0.05, 5 distinct) — the primary urgency axes. The reliability/freshness
-# columns are coarser ON PURPOSE:
+# (20/10/5/2/1 ms, 5 distinct) — the primary urgency axis. (The reward NO LONGER
+# uses α_e — removed 2026-06-23; severity enters only via constraints + λ.) The
+# reliability/freshness columns are coarser ON PURPOSE:
 #   • eps (C2): 3 distinct {1e-3,1e-4,1e-5} = standardized 3GPP reliability
 #     "nines" (99.9 / 99.99 / 99.999 %). 5 distinct values would FABRICATE
 #     non-standard classes (e.g. 99.95 %); 3 tiers is the standards-correct map.
@@ -168,13 +172,15 @@ SEVERITY_QOS: Final[dict[int, dict[str, Any]]] = {
     },
 }
 
-# Severity reward weights α(severity). Post-restructure (2026-05-26) reward is
-# SINGLE-TERM eMBB log-utility: r = α_eMBB(sev) · log(1 + R_eMBB/R_REF) (oran_env).
-# Only the "embb" weight enters the reward. The "urllc" weight is RETAINED for
-# diagnostics / legacy ablation only — URLLC is enforced via Lagrangian λ_1, λ_2
-# (C1, C2 hard constraints), NOT via a reward penalty. See docs/13 §2.1.
-# Monotonic: higher severity → lower α_embb (eMBB deprioritized, PRB → URLLC).
-# Reference: docs/05_agent_workflow.md; docs/REFERENCE_MAP.md §2 (design assumption).
+# Severity reward weights α(severity) — ⚠️ REFERENCE TABLE ONLY, NOT wired into
+# the reward (α_e REMOVED from reward 2026-06-23). The live reward is the PURE
+# eMBB log-utility r = mean_tick log(1 + R_eMBB/R_REF) with NO α_e weight:
+# severity differentiation is enforced ENTIRELY via constraints C1–C5 + λ dual
+# ascent (α_e was redundant double-counting and obscured the Manager gradient —
+# at sev5 α_e=0.05 drove reward ≈ 0). Kept as a documented design reference and
+# for legacy-ablation tests. get_severity_alpha() reads this table but no
+# training-path code calls it. See docs/OPTIMIZATION_PROBLEM_FINAL §Objective.
+# Monotonic: higher severity → lower α_embb (historical eMBB-deprioritization).
 SEVERITY_ALPHA: Final[dict[int, dict[str, float]]] = {
     1: {"urllc": 0.30, "embb": 0.70},   # NON_URGENT
     2: {"urllc": 0.45, "embb": 0.55},   # SEMI_URGENT
@@ -193,9 +199,9 @@ SEVERITY_ALPHA: Final[dict[int, dict[str, float]]] = {
 # C3 is a MEAN-THROUGHPUT constraint: E[R_eMBB] >= 10 Mbps (NOT a chance
 # constraint). It uses Option-b interval-window subgradient (same as C1/C4).
 # C3 is a clean decoupled eMBB safety floor, NOT coupled to URLLC severity. A
-# fixed LOW floor (10 Mbps) avoids the reward↔C3 contradiction: the reward
-# already deprioritizes eMBB at high severity (SEVERITY_ALPHA["embb"] 0.70→0.05),
-# so a high or severity-keyed floor would fight the reward. 10 Mbps is met with
+# fixed LOW floor (10 Mbps) keeps C3 a genuine starvation safety net rather than
+# a severity-keyed target that would fight the constraint-driven b_rrm increase
+# at high severity. 10 Mbps is met with
 # large slack across the whole domain (feasibility oracle: R_eMBB ≥ 97 Mbps even
 # at cell-edge [5,5,5] heavy load), so C3 acts as a genuine starvation safety net
 # rather than a target. (Replaces the prior severity-keyed table 30→10.)
@@ -207,13 +213,19 @@ CMDP_D_J_SEVERITY: Final[dict[int, dict[str, float]]] = {
     5: {"d1_lat_mean": 1e-3,  "d2_lat_tail": 1e-5,  "d3_embb_mbps": 10.0, "d4_aoi_mean": 0.1, "d5_aoi_tail": 1e-3},
 }
 
-# λ_warm table [C1, C2, C3, C4, C5] — per-severity warm-start. Overall λ grows
-# with severity (mean). The C3 slot (index 2, eMBB-floor dual) is now FIXED at
+# λ_warm table [C1, C2, C3, C4, C5] — ONE-TIME initial value of the PERSISTENT
+# per-severity dual variable (NOT a per-episode reset prior). Used only to seed
+# λ_warm[sev] the first time a severity is seen in a run; thereafter λ_warm[sev]
+# persists and accumulates across same-severity episodes (β_ema=1.0 full
+# persistence, audit 2026-06-23 — see agents/lagrangian.py). Overall λ grows
+# with severity (mean). The C3 slot (index 2, eMBB-floor dual) is FIXED at
 # 0.02 for every severity (formulation-audit Gate 7, 2026-06-20): the eMBB floor
-# is a severity-independent 10 Mbps that is rarely binding (met with large slack),
-# so a uniform small warm-start dual is consistent. C1/C2/C4/C5 remain
-# severity-increasing (tighter QoS at higher severity).
-# Reference: docs/05_agent_workflow.md:174-180
+# is a severity-independent 10 Mbps that is rarely binding (met with large slack).
+# C1/C2/C4/C5 remain severity-increasing (tighter QoS at higher severity).
+# Reference: docs/05_agent_workflow.md
+# Caveat: λ accumulates at rate α_λ·ĝ per Manager step (~1.2e-3/episode for C2 at
+# sev5) — reaching equilibrium λ*≈4.0 needs a long run (~1.5k sev5 episodes). The
+# persistence fix makes accumulation MONOTONIC (was pinned); rate is α_λ-bound.
 LAMBDA_WARM: Final[dict[int, list[float]]] = {
     1: [0.02, 0.01, 0.02, 0.01, 0.00],   # NON_URGENT  (C3 fixed: eMBB floor 10 Mbps)
     2: [0.15, 0.08, 0.02, 0.05, 0.02],   # SEMI_URGENT
@@ -431,7 +443,9 @@ R_REF_EMBB_MBPS: Final[float] = 100.0   # eMBB log-utility normalization anchor 
 # Mirrors D_REF_URLLC: 0.1 s = tightest AoI_max (severity 5 IMMEDIATE). Used ONLY
 # to scale the C4 subgradient so its magnitude matches C1/C2/C3/C5; without it
 # C4's deviation (raw seconds) is ~10× weaker than C1's and AoI is under-weighted.
-# See agents/lagrangian.py CONSTRAINT_DUAL_SCALES + docs/13 §2.3.3.
+# See build_dual_scales() below (per-instance, K-aware; superseded the old
+# module-level CONSTRAINT_DUAL_SCALES constant — removed 2026-06-24, dead
+# since ĐX2) + docs/13 §2.3.3.
 AOI_REF_S: Final[float] = 0.1
 
 # Reviewer M4 (internal review, W06, 2026-05-27):
@@ -470,22 +484,26 @@ WORKER_STEPS_PER_MANAGER: Final[int] = 10   # T_H / T_L = 100 ms / 10 ms (sim)
 GAMMA_WORKER: Final[float] = GAMMA                                # = 0.99 per Worker step (10 ms)
 GAMMA_MANAGER: Final[float] = GAMMA ** WORKER_STEPS_PER_MANAGER   # = 0.99^10 ≈ 0.904 per Manager step
 
-# Manager PRB-budget bounds — outer [B_RRM_MIN, B_RRM_MAX] from decode_manager_action;
-# set_rrm_budget() further clips to [B_RRM_FLOOR_BY_SEV[sev], feasible_rrm_cap].
+# Manager PRB-budget bounds — ANALYTICAL INITIAL BOUNDS.
 #
-# Design constraint (user-mandated, 2026-06-22): xe cứu thương LUÔN ưu tiên hơn eMBB
-# ở MỌI severity. Bệnh nhân luôn trên xe (còi hú bật) → URLLC > 50% PRB luôn.
-# Floor tăng monotonic theo severity: ambulance ở sev thấp vẫn ưu tiên, sev cao
-# càng ưu tiên hơn. RL fine-tunes trong khoảng [floor, B_RRM_MAX].
-B_RRM_FLOOR_BY_SEV: Final[dict[int, float]] = {
-    1: 0.65,   # NON_URGENT:  URLLC ≥ 65%  (range [0.65, 0.85] = 20% room)
-    2: 0.70,   # SEMI_URGENT: URLLC ≥ 70%  (range [0.70, 0.85] = 15% room)
-    3: 0.75,   # URGENT:      URLLC ≥ 75%  (range [0.75, 0.85] = 10% room)
-    4: 0.80,   # EMERGENCY:   URLLC ≥ 80%  (range [0.80, 0.85] =  5% room)
-    5: 0.85,   # IMMEDIATE:   URLLC ≥ 85%  (range [0.85, 0.85] =  0% fixed)
-}
-B_RRM_MIN: Final[float] = 0.65   # global floor = min(B_RRM_FLOOR_BY_SEV) → URLLC always > eMBB
-B_RRM_MAX: Final[float] = 0.85   # upper bound: leaves ≥15% PRBs for eMBB
+# These are conservative estimates from closed-form physics, NOT proven
+# feasibility bounds.  C_PRB depends on SINR (varies per episode), MCS,
+# BLER, retransmission, number of active vehicles, and channel variation.
+# Using a fixed SINR=0 dB is a worst-case proxy, not a guarantee.
+#
+#   B_RRM_ANALYTICAL_MIN ≈ K · ⌈L_req / C_PRB(0 dB)⌉ / 273
+#       — minimum for packet service (queue stability, no collapse).
+#       Keyed by K (number of active vehicles), NOT severity.
+#   B_RRM_ANALYTICAL_MAX ≈ 1 − ⌈10 Mbps / C_PRB(0 dB)⌉ / 273
+#       — maximum where C3 (E[R_eMBB] ≥ 10 Mbps) still holds.
+#
+# After sweep validation, these will be replaced by empirical bounds.
+# Severity differentiation is ENTIRELY via constraints C1–C5 + λ dual
+# ascent — no hard floor per severity (B_RRM_FLOOR_BY_SEV removed).
+B_RRM_ANALYTICAL_MIN: Final[float] = 0.05   # ~14 PRBs — conservative service floor for K=1
+B_RRM_ANALYTICAL_MAX: Final[float] = 0.86   # ~38 PRBs reserved for eMBB at 0 dB
+B_RRM_MIN: Final[float] = B_RRM_ANALYTICAL_MIN
+B_RRM_MAX: Final[float] = B_RRM_ANALYTICAL_MAX
 
 # Legacy aliases (DO NOT use in new code — kept for backward compat in tests)
 T_H_SIM: Final[float] = T_H_SEC             # Manager step = 100 ms (alias of T_H_SEC)
@@ -559,19 +577,46 @@ def get_severity_alpha(sev: int) -> tuple[float, float]:
 # ============================================================
 
 
-def build_dual_scales(K: int) -> np.ndarray:
-    """Return (4K+1,)-dim CONSTRAINT_DUAL_SCALES for K ambulances.
+def build_dual_scales(K: int, severity_per_amb: Sequence[int] | None = None) -> np.ndarray:
+    """Return (4K+1,)-dim constraint normalization scales for K ambulances.
 
-    At K=1: [D_REF_URLLC, 1.0, AOI_REF_S, 1.0, R_REF_EMBB_MBPS] — the
-    permutation [0,1,3,4,2] of the legacy 5-dim CONSTRAINT_DUAL_SCALES.
+    Per-severity normalization (audit 2026-06-24, ĐX2):
+        C1_k scale = D_max^{sev_k}   (was fixed D_REF_URLLC = 1ms for every k)
+        C4_k scale = AoI_max^{sev_k} (was fixed AOI_REF_S = 0.1s for every k)
+    so dev = (c-d)/scale is always in "multiples of the threshold" — dev=0 at
+    the boundary, dev=+1 at 2× the threshold — regardless of severity. This
+    removes the 10-20× penalty-magnitude amplification that occurred when a
+    low-severity constraint (D_max=20ms) was normalized by the tightest
+    threshold (D_max=1ms), which caused bimodal returns, critic EV collapse,
+    and Manager inability to learn severity-conditioned b_rrm allocation.
+
+    C2/C5 (tail probability ∈[0,1]) and C3 (eMBB Mbps) are unchanged.
+
+    When severity_per_amb is None, falls back to the old fixed-scale behavior
+    (backward compat for tests / ablation variants that don't carry severity).
     """
     if not isinstance(K, (int, np.integer)) or K < 1:
         raise ValueError(f"K must be an int >= 1 (at least one ambulance); got {K!r}")
+    if severity_per_amb is not None and len(severity_per_amb) != K:
+        raise ValueError(f"severity_per_amb length {len(severity_per_amb)} != K={K}")
+    if severity_per_amb is not None:
+        for s in severity_per_amb:
+            if int(s) not in CMDP_D_J_SEVERITY:
+                raise ValueError(
+                    f"Invalid severity {s} in severity_per_amb; must be in {set(CMDP_D_J_SEVERITY)}"
+                )
+        c1 = np.array([CMDP_D_J_SEVERITY[int(s)]["d1_lat_mean"]
+                        for s in severity_per_amb], dtype=np.float64)
+        c4 = np.array([CMDP_D_J_SEVERITY[int(s)]["d4_aoi_mean"]
+                        for s in severity_per_amb], dtype=np.float64)
+    else:
+        c1 = np.full(K, D_REF_URLLC, dtype=np.float64)
+        c4 = np.full(K, AOI_REF_S, dtype=np.float64)
     return np.concatenate([
-        np.full(K, D_REF_URLLC, dtype=np.float64),     # C1_k
-        np.full(K, 1.0, dtype=np.float64),             # C2_k
-        np.full(K, AOI_REF_S, dtype=np.float64),       # C4_k
-        np.full(K, 1.0, dtype=np.float64),             # C5_k
+        c1,                                              # C1_k
+        np.full(K, 1.0, dtype=np.float64),              # C2_k (probability)
+        c4,                                              # C4_k
+        np.full(K, 1.0, dtype=np.float64),              # C5_k (probability)
         np.array([R_REF_EMBB_MBPS], dtype=np.float64),  # C3 shared
     ])
 
@@ -610,10 +655,15 @@ def build_d_phi_vector(severity_per_amb: Sequence[int]) -> np.ndarray:
 
     Note (no ``severity_ref`` parameter, unlike ``build_lambda_warm_vector``):
     the shared C3 slot (index 4K) is **0.0 unconditionally** — the threshold is
-    for the SIGNED eMBB gap, and the R_min^sev_ref floor is carried inside the
-    env-computed ``c_vec[4K] = R_min^sev_ref − R_eMBB`` (oran_env step()), NOT in
-    d_phi. So C3 reduces to ``deviation = c3 − 0 = signed_gap``. ``severity_ref``
-    is only relevant for locating that floor in c_vec; it is not needed here.
+    for the SIGNED eMBB gap, and the R_min floor (FIXED 10 Mbps, severity-
+    INDEPENDENT — see ``CMDP_D_J_SEVERITY[*]["d3_embb_mbps"]`` above, identical
+    at every severity) is carried inside the env-computed
+    ``c_vec[4K] = R_min − R_eMBB`` (oran_env step()), NOT in d_phi. So C3
+    reduces to ``deviation = c3 − 0 = signed_gap``. ``severity_ref`` there is
+    only a TABLE LOOKUP KEY (``CMDP_D_J_SEVERITY[sev_ref]``) for locating the
+    row in c_vec's source table — the returned d3_embb_mbps value never
+    changes, so R_min itself does not depend on severity; it is not needed
+    here.
     ⚠️ Load-bearing coupling: if c_vec[4K] were ever changed to raw R_eMBB (not
     the gap), d3=0 would become WRONG — tests/test_env_c3.py locks the sign.
     """

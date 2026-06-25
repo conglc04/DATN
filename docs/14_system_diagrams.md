@@ -17,12 +17,12 @@ Near-RT RIC (Manager 100ms → Worker 10ms) → O-DU/O-RU MAC (TTI 0.5ms); W=10 
 ## 3. Bên trong môi trường `oran_env.py` (1 Worker step = 20 MAC tick)
 ![Env internal](figures/03_env_internal.svg)
 
-Vòng 20 MAC tick: channel → arrivals → M/G/1 queue → delay/throughput → reward + c_vec; severity (cố định/episode) + AoI. Reward = α_e(sev)·log(1+R_eMBB/R_REF). Xem [04_data_flow](04_data_flow.md).
+Vòng 20 MAC tick: channel → arrivals → M/G/1 queue → delay/throughput → reward + c_vec; severity (cố định/episode) + AoI. Reward = `mean_tick log(1+R_eMBB/R_REF)` (MEAN over ticks, KHÔNG α_e — bỏ 2026-06-23). Xem [04_data_flow](04_data_flow.md).
 
 ## 4. Bài toán tối ưu CMDP (objective + ràng buộc + Lagrangian)
 ![CMDP](figures/04_cmdp.svg)
 
-Objective single-term `α_e(sev)`; C1–C5 hard với ngưỡng `d_j^sev` theo severity (C6 demote→metric, K≥2); dual ascent `λ←clip(λ+α_λ·ĝ,0,10)`, subgradient chuẩn hóa `ĝ=(c−d)/scale`. λ_local + severity inject vào obs (Markov). Xem [02_requirements](02_requirements.md#severity-qos-table) + [13 §2](13_methodology_walkthrough.md).
+Objective single-term `mean_tick log(1+R_eMBB/R_REF)` (KHÔNG α_e — severity vào hệ qua constraint+λ); C1–C5 hard với ngưỡng `d_j^sev` theo severity (C6 demote→metric, K≥2); dual ascent `λ←clip(λ+α_λ·ĝ,0,10)`, subgradient chuẩn hóa `ĝ=(c−d)/scale`. λ_local + severity inject vào obs (Markov). Xem [02_requirements](02_requirements.md#severity-qos-table) + [13 §2](13_methodology_walkthrough.md).
 
 ## 5. Không gian quan sát (32-dim, K=1) & hành động (1-dim K=1 / K-dim K≥2)
 ![State/Action](figures/05_state_action.svg)

@@ -170,9 +170,10 @@ class TestQ4WorkerAllocation:
         assert prb.sum() == B_U
 
     def test_prb_min_qos_floor(self):
-        # oran_env.py:1165: allocs = np.maximum(allocs, PRB_MIN_QOS)
-        # With extreme logits + small budget, the cap path may override floor.
-        # Test with moderate budget where floor is achievable.
+        # oran_env.py _prb_split_intra_slice: reserve-first split (audit
+        # 2026-06-24) guarantees PRB_MIN_QOS for every active amb by
+        # construction, even with extreme logit skew, as long as the
+        # feasibility precondition B_U >= K_active*PRB_MIN_QOS holds.
         env = _env(K=3)
         _equal_state(env, sev=(1,1,1), b_rrm=0.30)
         action = np.array([3.0, -1.0, -1.0], dtype=np.float32)
@@ -266,13 +267,14 @@ class TestQ7Lagrangian:
         r_aug = ls.augmented_reward(7.0, c, d)
         assert r_aug == pytest.approx(7.0 - expected_penalty, abs=1e-10)
 
-    def test_reward_is_sum_constraint_is_mean(self):
-        # oran_env.py:786-788: reward_accumulated += _mac_tick() → SUM
-        # oran_env.py:806: c_vec = accum / denom → MEAN
+    def test_reward_and_constraint_both_mean(self):
+        # oran_env.py: reward_accumulated /= n_ticks → MEAN (matched basis).
+        # c_vec = accum / denom → MEAN. Both per-tick averages so the augmented
+        # Lagrangian is balanced (audit 2026-06-23 starvation root-cause fix).
         env = _env(K=1); env.set_rrm_budget(0.20)
         _, rew, _, _, info = env.step(np.zeros(1, dtype=np.float32))
-        per_tick = rew / MAC_TICKS_PER_WORKER
-        assert per_tick > 0.05  # reward is SUM (total > per-tick)
+        # Reward is per-tick MEAN, NOT ×20 sum: a single tick log-utility scale.
+        assert 0.0 < rew < 2.0  # MEAN basis (a SUM would be ~10-24)
         assert 0.0 <= info["c_vec"][0] < 0.1  # c_vec is MEAN
 
     def test_dual_ascent_at_manager_boundary(self):

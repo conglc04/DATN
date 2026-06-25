@@ -225,23 +225,26 @@ class TestDecodeManagerAction:
 class TestBuildManagerState:
     def test_severity_norm_at_position_3(self):
         """Severity one-hot at obs[12] → sev_idx = (2+1)/5 = 0.6 at s_H[3]."""
-        obs = np.zeros(31, dtype=np.float32)
+        obs = np.zeros(32, dtype=np.float32)
         obs[12] = 1.0           # obs[10:15] one-hot, index 2 → (2+1)/5 = 0.6
         lam = np.zeros(5, dtype=np.float32)
-        s_H = build_manager_state(obs, lam)
+        g_hat = np.zeros(5, dtype=np.float32)
+        s_H = build_manager_state(obs, lam, g_hat)
         assert s_H[3] == pytest.approx(0.6, abs=1e-6)
 
     def test_output_dim_k1(self):
-        obs = np.zeros(31, dtype=np.float32)
+        obs = np.zeros(32, dtype=np.float32)
         lam = np.zeros(5, dtype=np.float32)
-        s_H = build_manager_state(obs, lam)
-        assert s_H.shape == (manager_state_dim(1),)   # 11
+        g_hat = np.zeros(5, dtype=np.float32)
+        s_H = build_manager_state(obs, lam, g_hat)
+        assert s_H.shape == (manager_state_dim(1),)   # 18
 
     def test_output_dim_k3(self):
-        obs = np.zeros(51, dtype=np.float32)  # 20 + 10*3 + 1 = 51
+        obs = np.zeros(54, dtype=np.float32)  # 20 + 11*3 + 1 = 54 (F=1)
         lam = np.zeros(13, dtype=np.float32)  # 4*3+1 = 13
-        s_H = build_manager_state(obs, lam)
-        assert s_H.shape == (manager_state_dim(3),)   # 19
+        g_hat = np.zeros(13, dtype=np.float32)
+        s_H = build_manager_state(obs, lam, g_hat)
+        assert s_H.shape == (manager_state_dim(3),)   # 34
 
 
 # ============================================================
@@ -415,6 +418,7 @@ class TestManagerRewardAccumulation:
             n_episodes=2,
             seed=0,
             log_dir=str(tmp_path),
+            checkpoint_dir=str(tmp_path / "checkpoints"),
             checkpoint_every=0,
         )
         assert isinstance(summary["ep_reward"], float)
@@ -428,6 +432,7 @@ class TestManagerRewardAccumulation:
             n_episodes=2,
             seed=0,
             log_dir=str(tmp_path),
+            checkpoint_dir=str(tmp_path / "checkpoints"),
             checkpoint_every=0,
         )
         assert isinstance(summary["ep_reward"], float)

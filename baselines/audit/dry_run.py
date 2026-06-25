@@ -11,6 +11,7 @@ from env.oran_env import EnvConfig, ORANEnv
 from agents.lagrangian import LambdaState
 from agents.manager_agent import decode_manager_action
 from solvers._common import build_manager_state
+from agents.manager_agent import manager_state_dim
 from utils.config import P_TOTAL, WORKER_STEPS_PER_MANAGER
 
 fails = []
@@ -29,7 +30,7 @@ def run(K, sev, label):
     sev0 = tuple(int(s) for s in info["severity_per_amb"])
     a_worker = np.zeros(env.action_space.shape, dtype=np.float32)
     nan_free = True; cons_ok = True; sev_ok = True; cvec_ok = True
-    manager_held = True
+    manager_held = True; mgr_state_ok = True
     b_rrm = decode_manager_action(np.array([0.5]))["b_rrm"]
     env.set_rrm_budget(b_rrm)
     held_val = env.r_min_urllc
@@ -55,6 +56,11 @@ def run(K, sev, label):
         ls.accumulate(c, np.asarray(info["d_phi"]))
         if (step + 1) % WORKER_STEPS_PER_MANAGER == 0:
             ls.on_manager_step_end()
+            # Manager state (incl. λ_global + current g_hat residual) at the
+            # boundary must match the (10+8K)-dim contract and stay finite.
+            s_H = build_manager_state(obs, ls.get_lambda_global(), ls.get_deviation_hat())
+            if s_H.shape != (manager_state_dim(K),) or not np.all(np.isfinite(s_H)):
+                mgr_state_ok = False
         if term or trunc:
             break
     ck(f"{label}.no_nan_inf", nan_free)
@@ -62,6 +68,7 @@ def run(K, sev, label):
     ck(f"{label}.severity_persists", sev_ok, f"sev={sev0}")
     ck(f"{label}.cvec_dim_4K+1", cvec_ok)
     ck(f"{label}.manager_held_in_window", manager_held)
+    ck(f"{label}.manager_state_dim_10+8K", mgr_state_ok, f"expect {manager_state_dim(K)}")
     ck(f"{label}.episode_past_1s_chunk", steps > 100, f"ran {steps} worker steps (>100 = past 1s)")
     ck(f"{label}.lambda_finite", bool(np.all(np.isfinite(ls.get_lambda_global()))))
     ck(f"{label}.active_mask_consistent",
