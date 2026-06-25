@@ -23,5 +23,8 @@ documents/
 # Local Claude Code tool settings (not project config)
 .claude/
 
+# Test suite (kept local, not pushed to GitHub)
+baselines/tests/
+
 # OS
 .DS_Store
