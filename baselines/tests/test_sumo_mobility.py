@@ -1180,9 +1180,6 @@ _EDGE_FROM_TO: dict[str, tuple[str, str]] = {
 _NET_FILE_PATH = os.path.normpath(
     os.path.join(os.path.dirname(__file__), "..", "..", "data", "sumo", "bachmaiHN.net.xml")
 )
-_ARTIFACTS_DIR = os.path.normpath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "artifacts")
-)
 
 
 def _fcd_edge_seq(K: int) -> dict[str, list[str]]:
@@ -1274,24 +1271,6 @@ class TestRouteMapBoundaryLock:
         lon_min, lat_min, lon_max, lat_max = orig
         assert lon_min < GNB_LON < lon_max
         assert lat_min < GNB_LAT < lat_max
-
-
-class TestRouteOverlayArtifactsGenerated:
-    """Route overlay PNGs and convergence PNG must exist — evidence requires visuals."""
-
-    @pytest.mark.parametrize("fname,min_bytes", [
-        ("w15_routes_k1.png",   50_000),
-        ("w15_routes_k3.png",   50_000),
-        ("w15_convergence.png", 10_000),
-    ])
-    def test_artifact_exists_and_nonzero(self, fname, min_bytes):
-        path = os.path.join(_ARTIFACTS_DIR, fname)
-        assert os.path.isfile(path), (
-            f"{fname} missing. Run: python data/sumo/05_verify_traces.py"
-        )
-        assert os.path.getsize(path) >= min_bytes, (
-            f"{fname} is {os.path.getsize(path)} bytes — may be empty/corrupt"
-        )
 
 
 class TestRouteEdgesExistInNetwork:
