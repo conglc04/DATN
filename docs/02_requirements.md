@@ -6,10 +6,12 @@ Ngưỡng từ **3GPP TS 22.261**. **Severity bệnh nhân** (5 mức, exogenous
 | Severity | D_max | ε (tail) | R_min^eMBB | AoI_max | Nguồn |
 |---|---|---|---|---|---|
 | 1 NON_URGENT | 20 ms | 1e-3 | 10 Mbps | 1.0 s | TS 22.261 Annex A (remote healthcare 10–100ms) |
-| 2 SEMI_URGENT | 10 ms | 1e-4 | 15 Mbps | 0.5 s | TS 22.261 Annex A |
-| 3 URGENT | 5 ms | 1e-4 | 20 Mbps | 0.2 s | TS 22.261 Annex A |
-| 4 EMERGENCY | 2 ms | 1e-5 | 30 Mbps | 0.1 s | TS 22.261 Annex A Table A.1-1 |
-| 5 IMMEDIATE | **1 ms** | **1e-5** | 30 Mbps | 0.1 s | TS 22.261 Annex D §D.1 + §7.2 |
+| 2 SEMI_URGENT | 10 ms | 1e-4 | 10 Mbps | 0.5 s | TS 22.261 Annex A |
+| 3 URGENT | 5 ms | 1e-4 | 10 Mbps | 0.2 s | TS 22.261 Annex A |
+| 4 EMERGENCY | 2 ms | 1e-5 | 10 Mbps | 0.1 s | TS 22.261 Annex A Table A.1-1 |
+| 5 IMMEDIATE | **1 ms** | **1e-5** | 10 Mbps | 0.1 s | TS 22.261 Annex D §D.1 + §7.2 |
+
+> **R_min^eMBB cố định 10 Mbps cho MỌI severity** (severity-**independent**, Gate 7 2026-06-20) — KHÔNG severity-keyed. C3 là eMBB starvation safety-floor, decoupled khỏi URLLC severity (`CMDP_D_J_SEVERITY[*]["d3_embb_mbps"]=10.0`). Bảng severity-keyed cũ (10→30 Mbps) **đã thay** bằng floor cố định; chỉ `D_max`/`ε`/`AoI_max` còn theo severity. Xem [EQUATION_TO_CODE_LEDGER.md](EQUATION_TO_CODE_LEDGER.md) C3 + `config.py:197-214`.
 
 - **α_eMBB(sev)** — ⚠️ **ĐÃ BỎ khỏi reward (2026-06-23)**: bảng `SEVERITY_ALPHA` (0.70→0.05) nay là **reference-only**, KHÔNG vào reward. Reward là pure eMBB log-utility `mean_tick log(1+R_eMBB/R_REF)`; severity vào hệ chỉ qua constraint C1–C5 + λ (xoá double-count). URLLC ép qua Lagrangian.
 - **AoI_max** (luồng URLLC tổng hợp `ambulance_status`, F=1, 2026-06-14 consolidation): theo severity (cột trên); placeholder, sweep {250,500,750}ms (M7.3).

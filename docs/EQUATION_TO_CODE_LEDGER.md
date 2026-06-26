@@ -33,8 +33,8 @@
 
 | ID | Equation | Units | Code | Independent | Status |
 |----|----------|-------|------|-------------|--------|
-| O1 | `r_t = α_e(sev_ref)·log(1+R_eMBB/R_REF)` | — | `env/oran_env.py:848-852` | runtime_oracle reward-form | ✅ |
-| O2 | `α_e ∈ {.70,.55,.40,.20,.05}` (sev↓) | — | `config.py:160 SEVERITY_ALPHA` | test_formulas_config | ✅ |
+| O1 | `r_t = log(1+R_eMBB/R_REF)` — pure eMBB log-utility, **NO α_e** (removed 2026-06-23); window reward = MEAN of 20 ticks | — | `env/oran_env.py:931-932` (tick), `:834` (MEAN) | runtime_oracle reward-form (`runtime_oracle.py:132`) | ✅ |
+| O2 | `SEVERITY_ALPHA` (.70→.05) = **reference-only**, NOT wired into reward (severity enters via constraints C1–C5 + λ) | — | `config.py:184 SEVERITY_ALPHA` (unused in training path) | test_formulas_config | ✅ |
 | O3 | `sev_ref = max(severity_per_amb)` | — | `env/oran_env.py:601` | test_formulation_audit G7 | ✅ |
 
 ## Constraints C1–C5 (Gate 7) — `g_j ≤ 0` satisfied, `g_j > 0` violated

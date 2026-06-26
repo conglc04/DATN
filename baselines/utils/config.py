@@ -424,7 +424,8 @@ RHO_URGENCY_TIEBREAK: Final[float] = 0.15  # legacy constant (kept for backward 
 # ============================================================
 # Phase 2.1 reward normalization (docs/13 Phase 2.1, post-restructure 2026-05-26)
 # SINGLE-TERM reward (oran_env.py:515):
-#   r = α_eMBB(φ) · U_eMBB ,  U_eMBB = log(1 + R_eMBB / R_REF_EMBB)   (bounded)
+#   r = U_eMBB ,  U_eMBB = log(1 + R_eMBB / R_REF_EMBB)   (bounded; NO α_e weight —
+#   α_e REMOVED from reward 2026-06-23, see line 175 note + oran_env.py:931-932)
 # URLLC enforced ONLY via Lagrangian C1, C2 (λ_1, λ_2) — NOT in reward.
 # L_URLLC = mean(D_e2e)/D_REF_URLLC is computed for DIAGNOSTICS only (info dict).
 # (DEPRECATED 2-term form r = -α_U·L_URLLC + α_e·U_eMBB removed: double-counted
@@ -558,8 +559,11 @@ def get_severity_thresholds(sev: int) -> dict[str, float]:
 
 
 def get_severity_alpha(sev: int) -> tuple[float, float]:
-    """Severity-weighted reward coefficients α_U(sev), α_e(sev) (Phase 2.1).
+    """Legacy severity-weighted coefficients α_U(sev), α_e(sev) (Phase 2.1).
 
+    ⚠️ REFERENCE-ONLY: α_e was REMOVED from the reward 2026-06-23 — no
+    training-path code calls this; the live reward is the pure eMBB log-utility
+    (oran_env.py:931-932). Kept for legacy-ablation tests + design provenance.
     Returns (alpha_urllc, alpha_embb) tuple. Sum to 1.0 per severity level.
     """
     if sev not in SEVERITY_ALPHA:

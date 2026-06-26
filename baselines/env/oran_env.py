@@ -702,7 +702,7 @@ class ORANEnv(gym.Env):
             pos, vel, _entered = self._mobility.advance_until_within(self.config.cell_radius_m)
             self.ambulance_pos = pos.astype(np.float64)
             self.ambulance_vel = vel.astype(np.float64)
-            dist = np.linalg.norm(self.ambulance_pos, axis=1)
+            dist = np.hypot(self.ambulance_pos[:, 0], self.ambulance_pos[:, 1])
             self.entered_mask = dist <= self.config.cell_radius_m
             # Precompute trajectory cache: vectorized interpolation for the
             # entire episode at 0.5ms resolution, replacing ~735K per-tick
@@ -1119,10 +1119,10 @@ class ORANEnv(gym.Env):
         NOT per-UE BLER (no per-UE CQI feedback is modelled). Calibration:
         ~50% BLER at SINR=0 dB; asymptotes to ~0% at high SINR.
         """
-        sinr = float(np.mean(self.last_sinr_db))
+        sinr = float(self.last_sinr_db.mean())
         # logistic curve: BLER ≈ 0.5 at SINR ≈ 0 dB, asymptotes → 0 at high SINR
         bler = 1.0 / (1.0 + math.exp(0.5 * (sinr - 2.0)))
-        return float(np.clip(bler, 1e-4, 0.5))
+        return min(max(bler, 1e-4), 0.5)
 
     def _sample_bler_per_amb(self) -> np.ndarray:
         """Per-ambulance BLER from per-ambulance SINR, same logistic as cell-average."""
@@ -1131,7 +1131,7 @@ class ORANEnv(gym.Env):
         for k in range(K):
             sinr_k = float(self.last_sinr_db[k])
             b = 1.0 / (1.0 + math.exp(0.5 * (sinr_k - 2.0)))
-            bler[k] = float(np.clip(b, 1e-4, 0.5))
+            bler[k] = min(max(b, 1e-4), 0.5)
         return bler
 
     def _sample_arrivals(self) -> tuple[np.ndarray, int]:
@@ -1181,7 +1181,7 @@ class ORANEnv(gym.Env):
         """
         K = self.config.K_ambulances
         prb_urllc, prb_emBB = self._prb_allocation()
-        sinr_avg = float(np.mean(self.last_sinr_db))
+        sinr_avg = float(self.last_sinr_db.sum()) / self.config.K_ambulances
         c_per_prb_avg = capacity_per_prb_bps(sinr_avg, eta=SHANNON_ETA)
 
         prb_per_amb = self._prb_split_intra_slice(prb_urllc)
@@ -1419,7 +1419,7 @@ class ORANEnv(gym.Env):
         enable_arrival=False → arrived_mask stays all-False (legacy exact behavior).
         Legacy RWP (no SUMO): entered_mask is all-True from reset, never changes here.
         """
-        dist_to_gnb = np.linalg.norm(self.ambulance_pos, axis=1)
+        dist_to_gnb = np.hypot(self.ambulance_pos[:, 0], self.ambulance_pos[:, 1])
         self._last_dist_to_gnb = dist_to_gnb.copy()
 
         # F6: latch cell entry via dist_to_gnb (SUMO path only; RWP: all-True from reset).
@@ -1438,9 +1438,8 @@ class ORANEnv(gym.Env):
         #   RWP:  legacy dist_to_gnb < arrival_radius_m fallback (no FCD).
         if self.config.enable_arrival:
             if self._mobility is not None:
-                dist_to_dest = np.linalg.norm(
-                    self.ambulance_pos - self._destination_xy_m, axis=1
-                )
+                _delta = self.ambulance_pos - self._destination_xy_m
+                dist_to_dest = np.hypot(_delta[:, 0], _delta[:, 1])
                 self._last_dist_to_dest = dist_to_dest.copy()
                 newly_arrived = self._mobility.reached_destination_mask.copy()
             else:
@@ -1508,10 +1507,10 @@ class ORANEnv(gym.Env):
 
         # Queue load: utilization ρ = λ/μ ∈ [0, 1], mean over K URLLC queues
         # (NOT duplicate of arrival rate). Identical to old scalar at K=1.
-        rho_urllc = float(np.clip(
-            np.mean([self.queues[f"urllc_{k}"].rho for k in range(K)]), 0.0, 1.0
-        ))
-        rho_emBB = float(np.clip(self.queues["eMBB"].rho, 0.0, 1.0))
+        rho_urllc = min(max(
+            sum(self.queues[f"urllc_{k}"].rho for k in range(K)) / K, 0.0
+        ), 1.0)
+        rho_emBB = min(max(self.queues["eMBB"].rho, 0.0), 1.0)
         # Arrival rates (per second, normalized differently from ρ).
         # arr_urllc = sum over K ambulances (total system rate, K=1-identical).
         arr_urllc = float(sum(self.queues[f"urllc_{k}"].arrival_rate for k in range(K))) / 1e3
@@ -1519,7 +1518,7 @@ class ORANEnv(gym.Env):
         # Clip HOL: unstable queue returns +inf; cap at sane upper bounds.
         # Mean over K URLLC queues (identical to old scalar at K=1).
         hol_urllc_ms = min(
-            float(np.mean([self.queues[f"urllc_{k}"].hol_delay() for k in range(K)])) * 1e3,
+            sum(self.queues[f"urllc_{k}"].hol_delay() for k in range(K)) / K * 1e3,
             100.0,
         )
         hol_emBB_ms = min(float(self.queues["eMBB"].hol_delay()) * 1e3, 1000.0)
@@ -1561,8 +1560,8 @@ class ORANEnv(gym.Env):
         # NB: v_k (speed) is now the sole signal distinguishing on-scene (v≈0) vs
         # in-transport (v high) mobility — phase one-hot no longer carries it.
         sinr_norm = self.last_sinr_db.astype(np.float32) / 40.0     # [-10, 40] dB → [-0.25, 1.0]
-        amb_dist = np.linalg.norm(self.ambulance_pos, axis=1) / max(self.config.cell_radius_m, 1.0)
-        amb_speed = np.linalg.norm(self.ambulance_vel, axis=1) / 60.0  # normalize by 60 m/s cap
+        amb_dist = np.hypot(self.ambulance_pos[:, 0], self.ambulance_pos[:, 1]) / max(self.config.cell_radius_m, 1.0)
+        amb_speed = np.hypot(self.ambulance_vel[:, 0], self.ambulance_vel[:, 1]) / 60.0  # normalize by 60 m/s cap
 
         # Per-ambulance proximity to QoS violation, using each ambulance's OWN
         # severity_k threshold (B5 epic 2026-06-15) — dimensionless ratios that
@@ -1677,7 +1676,7 @@ class ORANEnv(gym.Env):
             "r_min_urllc": self.r_min_urllc,
             "r_max_eMBB": self.r_max_emBB,
             "r_ded_urllc": self.r_ded_urllc,
-            "sinr_db": float(np.mean(self.last_sinr_db)),
+            "sinr_db": float(self.last_sinr_db.sum()) / self.config.K_ambulances,
             "mean_BLER": self.last_bler,
             # All K per-ambulance URLLC queues stable (C12 semantics; identical
             # to old scalar at K=1).

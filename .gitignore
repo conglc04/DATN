@@ -26,5 +26,8 @@ documents/
 # Test suite (kept local, not pushed to GitHub)
 baselines/tests/
 
+# Thesis template (local only)
+Mẫu_viết_quyển_tốt_nghiệp*/
+
 # OS
 .DS_Store

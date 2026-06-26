@@ -66,7 +66,7 @@ def run_window(K: int, severity_per_amb, seed: int) -> list:
 
     ls = LambdaState(K=K)
     ls.reset_episode(severity_per_amb, max(severity_per_amb))
-    scale = build_dual_scales(K)
+    scale = build_dual_scales(K, severity_per_amb)
 
     # Independent window accumulator for the dual
     win_dev = np.zeros(4 * K + 1)
